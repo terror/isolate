@@ -585,29 +585,27 @@ impl Sandbox {
     }
 
     if system.getegid().as_raw() != 0 {
-      system.setegid(0).map_err(|e| {
-        Error::PermissionError(format!("cannot switch to root group: {}", e))
-      })?;
+      system
+        .setegid(0)
+        .map_err(|e| Error::PermissionError(format!("cannot switch to root group: {}", e)))?;
     }
 
-    let (original_uid, original_gid) =
-      (system.getuid().as_raw(), system.getgid().as_raw());
+    let (original_uid, original_gid) = (system.getuid().as_raw(), system.getgid().as_raw());
 
-    let (original_uid, original_gid) =
-      match (config.security.as_uid, config.security.as_gid) {
-        (Some(_), Some(_)) if !(original_uid == 0) => {
-          return Err(Error::PermissionError(
-            "you must be root to use `as_uid` or `as_gid`".into(),
-          ));
-        }
-        (Some(uid), Some(gid)) => (uid, gid),
-        (None, None) => (original_uid, original_gid),
-        _ => {
-          return Err(Error::ConfigError(
-            "`as_uid` and `as_gid` must be used either both or none".into(),
-          ))
-        }
-      };
+    let (original_uid, original_gid) = match (config.security.as_uid, config.security.as_gid) {
+      (Some(_), Some(_)) if !(original_uid == 0) => {
+        return Err(Error::PermissionError(
+          "you must be root to use `as_uid` or `as_gid`".into(),
+        ));
+      }
+      (Some(uid), Some(gid)) => (uid, gid),
+      (None, None) => (original_uid, original_gid),
+      _ => {
+        return Err(Error::ConfigError(
+          "`as_uid` and `as_gid` must be used either both or none".into(),
+        ))
+      }
+    };
 
     system.umask(Mode::from_bits_truncate(0o022));
 
@@ -682,6 +680,7 @@ impl Sandbox {
 mod tests {
   use {
     super::*,
+    assert_matches::assert_matches,
     nix::{
       errno::Errno,
       sys::stat::Mode,
@@ -699,21 +698,21 @@ mod tests {
     uid: Uid,
   }
 
-  impl system::System for MockSystem {
-    fn geteuid(&self) -> Uid {
-      self.euid
-    }
-
+  impl System for MockSystem {
     fn getegid(&self) -> Gid {
       self.egid
     }
 
-    fn getuid(&self) -> Uid {
-      self.uid
+    fn geteuid(&self) -> Uid {
+      self.euid
     }
 
     fn getgid(&self) -> Gid {
       self.gid
+    }
+
+    fn getuid(&self) -> Uid {
+      self.uid
     }
 
     fn setegid(&self, _gid: u32) -> Result<(), nix::Error> {
@@ -743,7 +742,7 @@ mod tests {
     let config = SandboxConfig::default();
 
     let mock = MockSystem {
-      euid: Uid::from_raw(1000), // non-root
+      euid: Uid::from_raw(1000), // The `euid` here is not root.
       egid: Gid::from_raw(0),
       uid: Uid::from_raw(1000),
       gid: Gid::from_raw(0),
@@ -762,21 +761,19 @@ mod tests {
 
     let mock = MockSystem {
       euid: Uid::from_raw(0),
-      egid: Gid::from_raw(1000), // non-zero effective gid
+      egid: Gid::from_raw(1000), // The `egid` here is not root.
       uid: Uid::from_raw(0),
       gid: Gid::from_raw(1000),
-      setegid_errno: Some(Errno::EPERM), // simulate EPERM failure
+      setegid_errno: Some(Errno::EPERM), // Used to simulate EPERM failure.
       last_umask: RefCell::new(None),
     };
 
     let result = Sandbox::with_system(config, &mock);
 
-    match result {
-      Err(Error::PermissionError(msg)) => {
-        assert!(msg.contains("cannot switch to root group"));
-      }
-      _ => panic!("Expected PermissionError due to EPERM failure in setegid"),
-    }
+    assert_matches!(
+      result,
+      Err(Error::PermissionError(message)) if message.contains("cannot switch to root group")
+    );
   }
 
   #[test]
@@ -785,34 +782,36 @@ mod tests {
 
     let mock = MockSystem {
       euid: Uid::from_raw(0),
-      egid: Gid::from_raw(1000), // non-zero effective gid
+      egid: Gid::from_raw(1000), // The `egid` here is not root.
       uid: Uid::from_raw(0),
       gid: Gid::from_raw(1000),
-      setegid_errno: Some(Errno::EINVAL), // simulate EINVAL failure
+      setegid_errno: Some(Errno::EINVAL), // Used to simulate EINVAL failure.
       last_umask: RefCell::new(None),
     };
 
     let result = Sandbox::with_system(config, &mock);
 
-    match result {
-      Err(Error::PermissionError(msg)) => {
-        assert!(msg.contains("cannot switch to root group"));
-      }
-      _ => panic!("Expected PermissionError due to EINVAL failure in setegid"),
-    }
+    assert_matches!(
+      result,
+      Err(Error::PermissionError(message)) if message.contains("cannot switch to root group")
+    );
   }
 
   #[test]
   fn new_sandbox_as_uid_as_gid_non_root_original() {
-    let mut config = SandboxConfig::default();
-
-    config.security.as_uid = Some(2000);
-    config.security.as_gid = Some(2000);
+    let config = SandboxConfig {
+      security: SecurityConfig {
+        as_uid: Some(2000),
+        as_gid: Some(2000),
+        ..Default::default()
+      },
+      ..Default::default()
+    };
 
     let mock = MockSystem {
       euid: Uid::from_raw(0),
       egid: Gid::from_raw(0),
-      uid: Uid::from_raw(1000), // non-root real uid
+      uid: Uid::from_raw(1000), // The `uid` here is not root.
       gid: Gid::from_raw(1000),
       setegid_errno: None,
       last_umask: RefCell::new(None),
@@ -820,38 +819,37 @@ mod tests {
 
     let result = Sandbox::with_system(config, &mock);
 
-    match result {
-            Err(Error::PermissionError(msg)) => {
-                assert!(msg.contains("you must be root to use `as_uid` or `as_gid`"));
-            }
-            _ => panic!("Expected PermissionError for non-root original uid when using as_uid/as_gid"),
-        }
+    assert_matches!(
+      result,
+      Err(Error::PermissionError(message)) if message.contains("you must be root to use `as_uid` or `as_gid`")
+    );
   }
 
   #[test]
   fn new_sandbox_as_uid_without_as_gid() {
-    let mut config = SandboxConfig::default();
-
-    config.security.as_uid = Some(2000);
+    let config = SandboxConfig {
+      security: SecurityConfig {
+        as_uid: Some(2000),
+        ..Default::default()
+      },
+      ..Default::default()
+    };
 
     let mock = MockSystem {
-      euid: Uid::from_raw(0),
       egid: Gid::from_raw(0),
-      uid: Uid::from_raw(0),
+      euid: Uid::from_raw(0),
       gid: Gid::from_raw(0),
-      setegid_errno: None,
       last_umask: RefCell::new(None),
+      setegid_errno: None,
+      uid: Uid::from_raw(0),
     };
 
     let result = Sandbox::with_system(config, &mock);
 
-    match result {
-      Err(Error::ConfigError(msg)) => {
-        assert!(msg
-          .contains("`as_uid` and `as_gid` must be used either both or none"));
-      }
-      _ => panic!("Expected ConfigError when only one of as_uid/as_gid is set"),
-    }
+    assert_matches!(
+      result,
+      Err(Error::ConfigError(message)) if message.contains("`as_uid` and `as_gid` must be used either both or none")
+    );
   }
 
   #[test]
@@ -859,21 +857,19 @@ mod tests {
     let config = SandboxConfig::default();
 
     let mock = MockSystem {
-      euid: Uid::from_raw(0),
       egid: Gid::from_raw(0),
-      uid: Uid::from_raw(0),
+      euid: Uid::from_raw(0),
       gid: Gid::from_raw(0),
-      setegid_errno: None,
       last_umask: RefCell::new(None),
+      setegid_errno: None,
+      uid: Uid::from_raw(0),
     };
 
-    let sandbox = Sandbox::with_system(config, &mock)
-      .expect("Sandbox creation should succeed");
+    let sandbox = Sandbox::with_system(config, &mock).expect("Sandbox creation should succeed");
 
-    // With no as_uid/as_gid, the sandbox takes the original uid/gid from the
-    // system.
-    assert_eq!(sandbox.original_uid, 0);
+    // With no as_uid/as_gid, the sandbox takes the original uid/gid from the system.
     assert_eq!(sandbox.original_gid, 0);
+    assert_eq!(sandbox.original_uid, 0);
 
     assert_eq!(
       mock.last_umask.borrow().unwrap(),
@@ -883,93 +879,101 @@ mod tests {
 
   #[test]
   fn new_sandbox_valid_with_as() {
-    let mut config = SandboxConfig::default();
-
-    config.security.as_uid = Some(2000);
-    config.security.as_gid = Some(2000);
-
-    let mock = MockSystem {
-      euid: Uid::from_raw(0),
-      egid: Gid::from_raw(0),
-      // In this scenario, the real uid/gid is root so using as_uid/as_gid is
-      // allowed.
-      uid: Uid::from_raw(0),
-      gid: Gid::from_raw(0),
-      setegid_errno: None,
-      last_umask: RefCell::new(None),
+    let config = SandboxConfig {
+      security: SecurityConfig {
+        as_uid: Some(2000),
+        as_gid: Some(2000),
+        ..Default::default()
+      },
+      ..Default::default()
     };
 
-    let sandbox = Sandbox::with_system(config, &mock)
-      .expect("Sandbox creation should succeed");
+    let mock = MockSystem {
+      egid: Gid::from_raw(0),
+      euid: Uid::from_raw(0),
+      gid: Gid::from_raw(0),
+      last_umask: RefCell::new(None),
+      setegid_errno: None,
+      // In this scenario, the real uid/gid is root so using as_uid/as_gid is allowed.
+      uid: Uid::from_raw(0),
+    };
 
-    // When as_uid/as_gid are provided and allowed, the sandbox's IDs are set to
-    // those values.
+    let sandbox = Sandbox::with_system(config, &mock).expect("Sandbox creation should succeed");
+
+    // When as_uid/as_gid are provided and allowed, the sandbox's IDs are set to those values.
     assert_eq!(sandbox.original_uid, 2000);
     assert_eq!(sandbox.original_gid, 2000);
   }
 
   #[test]
   fn new_sandbox_box_dir_setup() {
-    let mut config = SandboxConfig::default();
-
-    config.environment.box_root = PathBuf::from("/tmp/isolate_test");
-    config.environment.first_uid = 10000;
-    config.environment.first_gid = 20000;
-    config.environment.num_boxes = 10;
-    config.security.box_id = Some(5);
-
-    let mock = MockSystem {
-      euid: Uid::from_raw(0),
-      egid: Gid::from_raw(0),
-      uid: Uid::from_raw(0),
-      gid: Gid::from_raw(0),
-      setegid_errno: None,
-      last_umask: RefCell::new(None),
+    let config = SandboxConfig {
+      environment: EnvironmentConfig {
+        box_root: PathBuf::from("/tmp/isolate_test"),
+        first_uid: 10000,
+        first_gid: 20000,
+        num_boxes: 10,
+        ..Default::default()
+      },
+      security: SecurityConfig {
+        box_id: Some(5),
+        ..Default::default()
+      },
+      ..Default::default()
     };
 
-    let sandbox = Sandbox::with_system(config, &mock)
-      .expect("Sandbox creation should succeed");
+    let mock = MockSystem {
+      egid: Gid::from_raw(0),
+      euid: Uid::from_raw(0),
+      gid: Gid::from_raw(0),
+      last_umask: RefCell::new(None),
+      setegid_errno: None,
+      uid: Uid::from_raw(0),
+    };
+
+    let sandbox = Sandbox::with_system(config, &mock).expect("Sandbox creation should succeed");
 
     assert_eq!(
       sandbox.box_dir,
       PathBuf::from("/tmp/isolate_test").join("5")
     );
 
-    assert_eq!(sandbox.box_uid, 10000 + 5);
     assert_eq!(sandbox.box_gid, 20000 + 5);
     assert_eq!(sandbox.box_id, 5);
+    assert_eq!(sandbox.box_uid, 10000 + 5);
   }
 
   #[test]
   fn new_sandbox_box_dir_out_of_range() {
-    let mut config = SandboxConfig::default();
-
-    config.environment.box_root = PathBuf::from("/tmp/isolate_test");
-    config.environment.first_uid = 10000;
-    config.environment.first_gid = 20000;
-    config.environment.num_boxes = 10; // valid box_ids: 0-9
-    config.security.box_id = Some(10);
+    let config = SandboxConfig {
+      environment: EnvironmentConfig {
+        box_root: PathBuf::from("/tmp/isolate_test"),
+        first_gid: 20000,
+        first_uid: 10000,
+        num_boxes: 10, // Valid box ID's are between 0 and 9 (inclusive).
+        ..Default::default()
+      },
+      security: SecurityConfig {
+        box_id: Some(10),
+        ..Default::default()
+      },
+      ..Default::default()
+    };
 
     let mock = MockSystem {
-      euid: Uid::from_raw(0),
       egid: Gid::from_raw(0),
-      uid: Uid::from_raw(0),
+      euid: Uid::from_raw(0),
       gid: Gid::from_raw(0),
-      setegid_errno: None,
       last_umask: RefCell::new(None),
+      setegid_errno: None,
+      uid: Uid::from_raw(0),
     };
 
     let result = Sandbox::with_system(config, &mock);
 
-    match result {
-      Err(Error::ConfigError(msg)) => {
-        assert!(
-          msg.contains("sandbox id out of range"),
-          "Unexpected error message: {}",
-          msg
-        );
-      }
-      _ => panic!("Expected ConfigError due to box_id out of range"),
-    }
+    assert_matches!(
+      result,
+      Err(Error::ConfigError(message)) if message.contains("sandbox id out of range")
+    );
   }
 }
