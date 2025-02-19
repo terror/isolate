@@ -1,4 +1,12 @@
-use {error::Error, std::path::PathBuf, thiserror::Error};
+use {
+  error::Error,
+  nix::{
+    sys::stat::{umask, Mode},
+    unistd::{getegid, geteuid, getgid, getuid, setegid, Gid},
+  },
+  std::path::PathBuf,
+  thiserror::Error,
+};
 
 mod error;
 
@@ -546,18 +554,54 @@ pub struct Meta {
 
 #[derive(Debug)]
 pub struct Sandbox {
-  /// Whether the sandbox has been initialized.
-  pub initialized: bool,
   /// The current sandbox configuration.
   pub config: SandboxConfig,
+  /// Whether the sandbox has been initialized.
+  pub initialized: bool,
+  /// Original group id that invoked the sandbox.
+  pub original_gid: u32,
+  /// Original user id that invoked the sandbox.
+  pub original_uid: u32,
 }
 
 impl Sandbox {
-  pub fn new(config: SandboxConfig) -> Self {
-    Self {
-      initialized: false,
-      config,
+  pub fn new(config: SandboxConfig) -> Result<Self> {
+    if !geteuid().is_root() {
+      return Err(Error::NotRoot);
     }
+
+    if getegid().as_raw() != 0 {
+      setegid(Gid::from_raw(0)).map_err(|e| {
+        Error::PermissionError(format!("Cannot switch to root group: {}", e))
+      })?;
+    }
+
+    let (original_uid, original_gid) = (getuid().as_raw(), getgid().as_raw());
+
+    let (original_uid, original_gid) =
+      match (config.security.as_uid, config.security.as_gid) {
+        (Some(_), Some(_)) if !(original_uid == 0) => {
+          return Err(Error::PermissionError(
+            "you must be root to use `as_uid` or `as_gid`".into(),
+          ));
+        }
+        (Some(uid), Some(gid)) => (uid, gid),
+        (None, None) => (original_uid, original_gid),
+        _ => {
+          return Err(Error::ConfigError(
+            "`as_uid` and `as_gid` must be used either both or none".into(),
+          ))
+        }
+      };
+
+    umask(Mode::from_bits_truncate(0o022));
+
+    Ok(Self {
+      config,
+      initialized: false,
+      original_gid,
+      original_uid,
+    })
   }
 
   pub fn add_dir_rule(&mut self, rule: DirRule) -> Result {
@@ -611,7 +655,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn sandbox_defaults() {
+  fn sandbox_config_defaults() {
     let config = SandboxConfig::default();
 
     assert_eq!(config.security.box_id, Some(0));
