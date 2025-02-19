@@ -5,30 +5,70 @@ mod error;
 type Result<T = (), E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug)]
+pub struct EnvironmentConfig {
+  /// All sandboxes are created under this directory.
+  ///
+  /// To avoid symlink attacks, this directory and all its ancestors
+  /// must be writeable only to root.
+  pub box_root: PathBuf,
+
+  /// First GID to use for sandboxes.
+  pub first_gid: u32,
+
+  /// First UID to use for sandboxes.
+  pub first_uid: u32,
+
+  /// Directory where lock files are created.
+  pub lock_root: PathBuf,
+
+  /// Number of sandbox instances supported.
+  pub num_boxes: u32,
+
+  /// Only root can create new sandboxes (default: false, i.e., everybody can).
+  pub restricted_init: bool,
+}
+
+impl Default for EnvironmentConfig {
+  fn default() -> Self {
+    Self {
+      box_root: PathBuf::from("/var/local/lib/isolate"),
+      first_gid: 60000,
+      first_uid: 60000,
+      lock_root: PathBuf::from("/run/isolate/locks"),
+      num_boxes: 1000,
+      restricted_init: false,
+    }
+  }
+}
+
+#[derive(Debug)]
 pub struct SandboxConfig {
-  /// Core sandbox security and identity settings.
-  pub security: SecurityConfig,
-  /// Input/Output configuration.
-  pub io: IoConfig,
-  /// Filesystem and directory configuration.
-  pub fs: FilesystemConfig,
   /// Sandbox behavior settings.
   pub behavior: BehaviorConfig,
-  /// Program execution limits and constraints.
-  pub program: ProgramConfig,
   /// Control group configuration (optional).
   pub cgroup: Option<CgroupConfig>,
+  /// Global environment configuration.
+  pub environment: EnvironmentConfig,
+  /// Filesystem and directory configuration.
+  pub fs: FilesystemConfig,
+  /// Input/Output configuration.
+  pub io: IoConfig,
+  /// Program execution limits and constraints.
+  pub program: ProgramConfig,
+  /// Core sandbox security and identity settings.
+  pub security: SecurityConfig,
 }
 
 impl Default for SandboxConfig {
   fn default() -> Self {
     Self {
-      security: SecurityConfig::default(),
-      io: IoConfig::default(),
-      fs: FilesystemConfig::default(),
       behavior: BehaviorConfig::default(),
-      program: ProgramConfig::default(),
       cgroup: None,
+      environment: EnvironmentConfig::default(),
+      fs: FilesystemConfig::default(),
+      io: IoConfig::default(),
+      program: ProgramConfig::default(),
+      security: SecurityConfig::default(),
     }
   }
 }
@@ -90,33 +130,34 @@ impl Default for SecurityConfig {
   }
 }
 
-/// Input/Output configuration for the sandbox
 #[derive(Debug)]
 pub struct IoConfig {
-  /// Redirect standard input from 'file'.
+  /// Redirect standard input from a file.
   ///
-  /// The 'file' has to be accessible inside the sandbox
+  /// The file has to be accessible inside the sandbox
   /// (which means that the sandboxed program can manipulate it arbitrarily).
   ///
   /// If not specified, standard input is inherited from the parent process.
   pub stdin: Option<PathBuf>,
 
-  /// Redirect standard error output to 'file'.
+  /// Redirect standard output to a file.
   ///
-  /// The 'file' has to be accessible inside the sandbox (which means that the
-  /// sandboxed program can manipulate it arbitrarily).
-  ///
-  /// If not specified, standard error output is inherited from the parent
-  /// process. See also `stderr_to_stdout`.
-  pub stdout: Option<PathBuf>,
-
-  /// Redirect standard output to 'file'.
-  ///
-  /// The 'file' has to be accessible inside the sandbox (which means that the
+  /// The file has to be accessible inside the sandbox (which means that the
   /// sandboxed program can manipulate it arbitrarily).
   ///
   /// If not specified, standard output is inherited from the parent process
   /// and the sandbox manager does not write anything to it.
+  pub stdout: Option<PathBuf>,
+
+  /// Redirect standard error output to a file.
+  ///
+  /// The file has to be accessible inside the sandbox (which means that the
+  /// sandboxed program can manipulate it arbitrarily).
+  ///
+  /// If not specified, standard error output is inherited from the parent
+  /// process.
+  ///
+  /// See also `stderr-to-stdout`.
   pub stderr: Option<PathBuf>,
 
   /// Redirect standard error output to standard output.
@@ -129,12 +170,15 @@ pub struct IoConfig {
   /// Try to handle interactive programs communicating over a tty.
   ///
   /// The sandboxed program will run in a separate process group, which will
-  /// temporarily become the foreground process group of the terminal. When
-  /// the program exits, the process group will be switched back to the
-  /// caller. Please note that the program can do many nasty things
-  /// including (but not limited to) changing terminal settings,
-  /// changing the line discipline, and stuffing characters to the terminal's
-  /// input queue using the TIOCSTI ioctl.
+  /// temporarily become the foreground process group of the terminal.
+  ///
+  /// When the program exits, the process group will be switched back to the
+  /// caller.
+  ///
+  /// Please note that the program can do many nasty things including (but not
+  /// limited to) changing terminal settings, changing the line discipline, and
+  /// stuffing characters to the terminal's input queue using the TIOCSTI
+  /// ioctl.
   ///
   /// Use with extreme caution.
   pub tty_hack: bool,
@@ -154,36 +198,37 @@ impl Default for IoConfig {
 
 #[derive(Debug)]
 pub struct FilesystemConfig {
-  /// Change directory to 'dir' before executing the program.
+  /// Change directory to a specified path before executing the program.
   ///
   /// This path must be relative to the root of the sandbox.
   pub cwd: Option<PathBuf>,
 
+  /// Directory rules for mounting.
+  pub dir_rules: Vec<DirRule>,
+
   /// Do not bind the default set of directories.
   ///
-  /// Care has to be taken to specify the correct set of rules (using *--dir*)
-  /// for the executed program to run correctly.
+  /// Care has to be taken to specify the correct set of rules (using
+  /// `dir_rules`) for the executed program to run correctly.
   ///
   /// In particular, +/box+ has to be bound.
   pub no_default_dirs: bool,
 
   /// By default, Isolate removes all special files (other than regular files
-  /// and directories) created inside the sandbox. If you need them, this
-  /// option disables that behavior, but you need to carefully check what
-  /// you open.
+  /// and directories) created inside the sandbox.
+  ///
+  /// If you need them, this option disables that behavior, but you need to
+  /// carefully check what you open.
   pub special_files: bool,
-
-  /// Directory rules for mounting
-  pub dir_rules: Vec<DirRule>,
 }
 
 impl Default for FilesystemConfig {
   fn default() -> Self {
     Self {
       cwd: None,
+      dir_rules: Vec::new(),
       no_default_dirs: false,
       special_files: false,
-      dir_rules: Vec::new(),
     }
   }
 }
@@ -205,9 +250,6 @@ pub struct BehaviorConfig {
   /// The combination of `verbose` and `silent` has an undefined effect.
   pub silent: bool,
 
-  /// Tell the sandbox manager to be verbose and report on what is going on.
-  pub verbose: bool,
-
   /// Multiple instances of Isolate cannot manage the same sandbox
   /// simultaneously.
   ///
@@ -216,6 +258,9 @@ pub struct BehaviorConfig {
   /// With this option, the new instance waits for the other instance to
   /// finish.
   pub wait: bool,
+
+  /// Tell the sandbox manager to be verbose and report on what is going on.
+  pub verbose: bool,
 }
 
 impl Default for BehaviorConfig {
@@ -231,29 +276,44 @@ impl Default for BehaviorConfig {
 
 #[derive(Debug)]
 pub struct DirRule {
-  /// Path inside the sandbox where the directory will be mounted
+  /// Path inside the sandbox where the directory will be mounted.
   pub inside_path: PathBuf,
-  /// Path outside the sandbox to be mounted (None for special mounts like tmp)
+  /// Path outside the sandbox to be mounted.
   pub outside_path: Option<PathBuf>,
-  /// Mount options for this directory
+  /// Mount options for this directory.
   pub options: DirOptions,
 }
 
 #[derive(Debug, Default)]
 pub struct DirOptions {
-  /// Allow read-write access instead of read-only
+  /// Allow read-write access.
   pub read_write: bool,
-  /// Allow access to character and block devices
+
+  /// Allow access to character and block devices.
   pub allow_devices: bool,
-  /// Disallow execution of binaries
+
+  /// Disallow execution of binaries.
   pub no_exec: bool,
-  /// Silently ignore if directory doesn't exist
+
+  /// Silently ignore the rule if the directory to be bound does not exist.
   pub maybe: bool,
-  /// Mount a device-less filesystem (e.g., "proc", "sysfs")
+
+  /// Instead of binding a directory, mount a device-less filesystem called
+  /// 'inside_path'.
+  ///
+  /// For example, this can be 'proc' or 'sysfs'.
   pub filesystem: Option<String>,
-  /// Create a temporary directory (implies read_write)
+
+  /// Bind a freshly created temporary directory writeable for the sandbox
+  /// user.
+  ///
+  /// Accepts no 'outside_path', implies `rw`.
   pub temporary: bool,
-  /// Do not bind mount recursively
+
+  /// Do not bind recursively.
+  ///
+  /// Without this option, mount points in the outside directory tree are
+  /// automatically propagated to the sandbox.
   pub no_recursive: bool,
 }
 
@@ -397,23 +457,35 @@ impl Default for ProgramConfig {
   }
 }
 
-/// Isolate can make use of system control groups provided by the kernel
-/// to constrain programs consisting of multiple processes.
-///
-/// Please note that this feature needs special system setup.
 #[derive(Debug, Clone)]
 pub struct CgroupConfig {
+  /// CPU set configuration (e.g., "0-3,5,7")
+  ///
+  /// See linux/Documentation/cgroups/cpusets.txt for precise syntax.
+  pub cpuset: Option<String>,
+
   /// Memory limit for the entire control group in kilobytes.
   pub memory_limit: Option<u32>,
-  /// Print the root of the control group hierarchy and exit.
-  pub print_cg_root: bool,
+
+  /// Memory nodes configuration (e.g., "0,1")
+  ///
+  /// See linux/Documentation/cgroups/cpusets.txt for precise syntax.
+  pub memset: Option<String>,
+
+  /// Control group under which we place our subgroups
+  ///
+  /// Either an explicit path to a subdirectory in cgroupfs, or "auto:file" to
+  /// read the path from "file", where it is put by isolate-cg-helper.
+  pub root: PathBuf,
 }
 
 impl Default for CgroupConfig {
   fn default() -> Self {
     Self {
+      cpuset: None,
       memory_limit: None,
-      print_cg_root: false,
+      memset: None,
+      root: PathBuf::from("auto:/run/isolate/cgroup"),
     }
   }
 }
@@ -488,48 +560,6 @@ impl Sandbox {
     }
   }
 
-  /// The sandboxed process gets its own filesystem namespace, which contains
-  /// only subtrees requested by directory rules:
-  ///
-  /// *-d, --dir=*'in'*=*'out'[*:*'options']::
-  /// 	Bind the directory 'out' as seen by the caller to the path 'in' inside
-  /// the sandbox. If there already was a directory rule for 'in', it is
-  /// replaced.
-  ///
-  /// *-d, --dir=*'dir'[*:*'options']::
-  /// 	Bind the directory +/+'dir' to 'dir' inside the sandbox.
-  /// 	If there already was a directory rule for 'in', it is replaced.
-  ///
-  /// *-d, --dir=*'in'*=*::
-  /// 	Remove a directory rule for the path 'in' inside the sandbox.
-  ///
-  /// By default, all directories are bound read-only and restricted (no
-  /// devices, no setuid binaries). This behavior can be modified using the
-  /// 'options':
-  ///
-  /// *rw*::
-  /// 	Allow read-write access.
-  ///
-  /// *dev*::
-  /// 	Allow access to character and block devices.
-  ///
-  /// *noexec*::
-  /// 	Disallow execution of binaries.
-  ///
-  /// *maybe*::
-  /// 	Silently ignore the rule if the directory to be bound does not exist.
-  ///
-  /// *fs*::
-  /// 	Instead of binding a directory, mount a device-less filesystem called
-  /// 'in'. 	For example, this can be 'proc' or 'sysfs'.
-  ///
-  /// *tmp*::
-  /// 	Bind a freshly created temporary directory writeable for the sandbox
-  /// user. 	Accepts no 'out', implies *rw*.
-  ///
-  /// *norec*::
-  /// 	Do not bind recursively. Without this option, mount points in the outside
-  /// 	directory tree are automatically propagated to the sandbox.
   pub fn add_dir_rule(&mut self, rule: DirRule) -> Result {
     if !self.initialized {
       return Err(Error::NotInitialized);
@@ -540,22 +570,6 @@ impl Sandbox {
     Ok(())
   }
 
-  /// UNIX processes normally inherit all environment variables from their
-  /// parent. The sandbox however passes only those variables which are
-  /// explicitly requested by environment rules:
-  ///
-  /// *-E, --env=*'var'::
-  /// 	Inherit the variable 'var' from the parent.
-  ///
-  /// *-E, --env=*'var'*=*'value'::
-  /// 	Set the variable 'var' to 'value'. When the 'value' is empty, the
-  /// 	variable is removed from the environment.
-  ///
-  /// The rules are applied in the order in which they were given, except for
-  /// `full-env`, which is applied first.
-  ///
-  /// The list of rules is automatically initialized with
-  /// *-ELIBC_FATAL_STDERR_=1*.
   pub fn add_env_rule(&mut self, _var: &str, _value: Option<&str>) -> Result {
     if !self.initialized {
       return Err(Error::NotInitialized);
@@ -570,7 +584,7 @@ impl Sandbox {
       return Err(Error::AlreadyInitialized);
     }
 
-    todo!("Initialize sandbox");
+    todo!("Initialize the sandbox");
   }
 
   /// Run a command in the sandbox.
@@ -579,7 +593,7 @@ impl Sandbox {
       return Err(Error::NotInitialized);
     }
 
-    todo!("Run command in sandbox");
+    todo!("Run a specified command in the sandbox");
   }
 
   /// Clean up the sandbox.
@@ -588,9 +602,7 @@ impl Sandbox {
       return Err(Error::NotInitialized);
     }
 
-    self.initialized = false;
-
-    Ok(())
+    todo!("Clean up the sandbox");
   }
 }
 
