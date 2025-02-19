@@ -2,13 +2,15 @@ use {
   error::Error,
   nix::{
     sys::stat::{umask, Mode},
-    unistd::{getegid, geteuid, getgid, getuid, setegid, Gid},
+    unistd::{getegid, geteuid, getgid, getuid, setegid, Gid, Uid},
   },
   std::path::PathBuf,
+  system::{MaterialSystem, System},
   thiserror::Error,
 };
 
 mod error;
+mod system;
 
 type Result<T = (), E = Error> = std::result::Result<T, E>;
 
@@ -566,17 +568,22 @@ pub struct Sandbox {
 
 impl Sandbox {
   pub fn new(config: SandboxConfig) -> Result<Self> {
-    if !geteuid().is_root() {
+    Self::with_system(config, &MaterialSystem)
+  }
+
+  fn with_system(config: SandboxConfig, system: &impl System) -> Result<Self> {
+    if !system.geteuid().is_root() {
       return Err(Error::NotRoot);
     }
 
-    if getegid().as_raw() != 0 {
-      setegid(Gid::from_raw(0)).map_err(|e| {
-        Error::PermissionError(format!("Cannot switch to root group: {}", e))
+    if system.getegid().as_raw() != 0 {
+      system.setegid(0).map_err(|e| {
+        Error::PermissionError(format!("cannot switch to root group: {}", e))
       })?;
     }
 
-    let (original_uid, original_gid) = (getuid().as_raw(), getgid().as_raw());
+    let (original_uid, original_gid) =
+      (system.getuid().as_raw(), system.getgid().as_raw());
 
     let (original_uid, original_gid) =
       match (config.security.as_uid, config.security.as_gid) {
@@ -594,7 +601,7 @@ impl Sandbox {
         }
       };
 
-    umask(Mode::from_bits_truncate(0o022));
+    system.umask(Mode::from_bits_truncate(0o022));
 
     Ok(Self {
       config,
@@ -652,7 +659,55 @@ impl Sandbox {
 
 #[cfg(test)]
 mod tests {
-  use super::*;
+  use {
+    super::*,
+    nix::{
+      errno::Errno,
+      sys::stat::Mode,
+      unistd::{Gid, Uid},
+    },
+    std::cell::RefCell,
+  };
+
+  struct MockSystem {
+    egid: Gid,
+    euid: Uid,
+    gid: Gid,
+    last_umask: RefCell<Option<Mode>>,
+    setegid_errno: Option<Errno>,
+    uid: Uid,
+  }
+
+  impl system::System for MockSystem {
+    fn geteuid(&self) -> Uid {
+      self.euid
+    }
+
+    fn getegid(&self) -> Gid {
+      self.egid
+    }
+
+    fn getuid(&self) -> Uid {
+      self.uid
+    }
+
+    fn getgid(&self) -> Gid {
+      self.gid
+    }
+
+    fn setegid(&self, _gid: u32) -> Result<(), nix::Error> {
+      if let Some(errno) = self.setegid_errno {
+        Err(errno)
+      } else {
+        Ok(())
+      }
+    }
+
+    fn umask(&self, mask: Mode) -> Mode {
+      *self.last_umask.borrow_mut() = Some(mask);
+      Mode::from_bits_truncate(0)
+    }
+  }
 
   #[test]
   fn sandbox_config_defaults() {
@@ -660,5 +715,175 @@ mod tests {
 
     assert_eq!(config.security.box_id, Some(0));
     assert_eq!(config.program.open_files_limit, Some(64));
+  }
+
+  #[test]
+  fn new_sandbox_without_root_euid() {
+    let config = SandboxConfig::default();
+
+    let mock = MockSystem {
+      euid: Uid::from_raw(1000), // non-root
+      egid: Gid::from_raw(0),
+      uid: Uid::from_raw(1000),
+      gid: Gid::from_raw(0),
+      setegid_errno: None,
+      last_umask: RefCell::new(None),
+    };
+
+    let result = Sandbox::with_system(config, &mock);
+
+    assert!(matches!(result, Err(Error::NotRoot)));
+  }
+
+  #[test]
+  fn new_sandbox_setegid_fails_with_eperm() {
+    let config = SandboxConfig::default();
+
+    let mock = MockSystem {
+      euid: Uid::from_raw(0),
+      egid: Gid::from_raw(1000), // non-zero effective gid
+      uid: Uid::from_raw(0),
+      gid: Gid::from_raw(1000),
+      setegid_errno: Some(Errno::EPERM), // simulate EPERM failure
+      last_umask: RefCell::new(None),
+    };
+
+    let result = Sandbox::with_system(config, &mock);
+
+    match result {
+      Err(Error::PermissionError(msg)) => {
+        assert!(msg.contains("cannot switch to root group"));
+      }
+      _ => panic!("Expected PermissionError due to EPERM failure in setegid"),
+    }
+  }
+
+  #[test]
+  fn new_sandbox_setegid_fails_with_einval() {
+    let config = SandboxConfig::default();
+
+    let mock = MockSystem {
+      euid: Uid::from_raw(0),
+      egid: Gid::from_raw(1000), // non-zero effective gid
+      uid: Uid::from_raw(0),
+      gid: Gid::from_raw(1000),
+      setegid_errno: Some(Errno::EINVAL), // simulate EINVAL failure
+      last_umask: RefCell::new(None),
+    };
+
+    let result = Sandbox::with_system(config, &mock);
+
+    match result {
+      Err(Error::PermissionError(msg)) => {
+        assert!(msg.contains("cannot switch to root group"));
+      }
+      _ => panic!("Expected PermissionError due to EINVAL failure in setegid"),
+    }
+  }
+
+  #[test]
+  fn new_sandbox_as_uid_as_gid_non_root_original() {
+    let mut config = SandboxConfig::default();
+
+    config.security.as_uid = Some(2000);
+    config.security.as_gid = Some(2000);
+
+    let mock = MockSystem {
+      euid: Uid::from_raw(0),
+      egid: Gid::from_raw(0),
+      uid: Uid::from_raw(1000), // non-root real uid
+      gid: Gid::from_raw(1000),
+      setegid_errno: None,
+      last_umask: RefCell::new(None),
+    };
+
+    let result = Sandbox::with_system(config, &mock);
+
+    match result {
+            Err(Error::PermissionError(msg)) => {
+                assert!(msg.contains("you must be root to use `as_uid` or `as_gid`"));
+            }
+            _ => panic!("Expected PermissionError for non-root original uid when using as_uid/as_gid"),
+        }
+  }
+
+  #[test]
+  fn new_sandbox_as_uid_without_as_gid() {
+    let mut config = SandboxConfig::default();
+
+    config.security.as_uid = Some(2000);
+
+    let mock = MockSystem {
+      euid: Uid::from_raw(0),
+      egid: Gid::from_raw(0),
+      uid: Uid::from_raw(0),
+      gid: Gid::from_raw(0),
+      setegid_errno: None,
+      last_umask: RefCell::new(None),
+    };
+
+    let result = Sandbox::with_system(config, &mock);
+
+    match result {
+      Err(Error::ConfigError(msg)) => {
+        assert!(msg
+          .contains("`as_uid` and `as_gid` must be used either both or none"));
+      }
+      _ => panic!("Expected ConfigError when only one of as_uid/as_gid is set"),
+    }
+  }
+
+  #[test]
+  fn new_sandbox_valid_no_as() {
+    let config = SandboxConfig::default();
+
+    let mock = MockSystem {
+      euid: Uid::from_raw(0),
+      egid: Gid::from_raw(0),
+      uid: Uid::from_raw(0),
+      gid: Gid::from_raw(0),
+      setegid_errno: None,
+      last_umask: RefCell::new(None),
+    };
+
+    let sandbox = Sandbox::with_system(config, &mock)
+      .expect("Sandbox creation should succeed");
+
+    // With no as_uid/as_gid, the sandbox takes the original uid/gid from the
+    // system.
+    assert_eq!(sandbox.original_uid, 0);
+    assert_eq!(sandbox.original_gid, 0);
+
+    assert_eq!(
+      mock.last_umask.borrow().unwrap(),
+      Mode::from_bits_truncate(0o022)
+    );
+  }
+
+  #[test]
+  fn new_sandbox_valid_with_as() {
+    let mut config = SandboxConfig::default();
+
+    config.security.as_uid = Some(2000);
+    config.security.as_gid = Some(2000);
+
+    let mock = MockSystem {
+      euid: Uid::from_raw(0),
+      egid: Gid::from_raw(0),
+      // In this scenario, the real uid/gid is root so using as_uid/as_gid is
+      // allowed.
+      uid: Uid::from_raw(0),
+      gid: Gid::from_raw(0),
+      setegid_errno: None,
+      last_umask: RefCell::new(None),
+    };
+
+    let sandbox = Sandbox::with_system(config, &mock)
+      .expect("Sandbox creation should succeed");
+
+    // When as_uid/as_gid are provided and allowed, the sandbox's IDs are set to
+    // those values.
+    assert_eq!(sandbox.original_uid, 2000);
+    assert_eq!(sandbox.original_gid, 2000);
   }
 }
