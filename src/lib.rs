@@ -556,6 +556,14 @@ pub struct Meta {
 
 #[derive(Debug)]
 pub struct Sandbox {
+  /// The directory for the sandbox (cf_box_root/<box_id>).
+  pub box_dir: PathBuf,
+  /// The group id for the sandbox (cf_first_gid + box_id).
+  pub box_gid: u32,
+  /// The sandbox ID (must be in the range 0..num_boxes).
+  pub box_id: u32,
+  /// The user id for the sandbox (cf_first_uid + box_id).
+  pub box_uid: u32,
   /// The current sandbox configuration.
   pub config: SandboxConfig,
   /// Whether the sandbox has been initialized.
@@ -603,7 +611,20 @@ impl Sandbox {
 
     system.umask(Mode::from_bits_truncate(0o022));
 
+    let box_id = config.security.box_id.unwrap_or(0);
+
+    if box_id >= config.environment.num_boxes {
+      return Err(Error::ConfigError(format!(
+        "sandbox id out of range (allowed: 0-{})",
+        config.environment.num_boxes - 1
+      )));
+    }
+
     Ok(Self {
+      box_dir: config.environment.box_root.join(box_id.to_string()),
+      box_gid: config.environment.first_gid + box_id,
+      box_id,
+      box_uid: config.environment.first_uid + box_id,
       config,
       initialized: false,
       original_gid,
@@ -885,5 +906,70 @@ mod tests {
     // those values.
     assert_eq!(sandbox.original_uid, 2000);
     assert_eq!(sandbox.original_gid, 2000);
+  }
+
+  #[test]
+  fn new_sandbox_box_dir_setup() {
+    let mut config = SandboxConfig::default();
+
+    config.environment.box_root = PathBuf::from("/tmp/isolate_test");
+    config.environment.first_uid = 10000;
+    config.environment.first_gid = 20000;
+    config.environment.num_boxes = 10;
+    config.security.box_id = Some(5);
+
+    let mock = MockSystem {
+      euid: Uid::from_raw(0),
+      egid: Gid::from_raw(0),
+      uid: Uid::from_raw(0),
+      gid: Gid::from_raw(0),
+      setegid_errno: None,
+      last_umask: RefCell::new(None),
+    };
+
+    let sandbox = Sandbox::with_system(config, &mock)
+      .expect("Sandbox creation should succeed");
+
+    assert_eq!(
+      sandbox.box_dir,
+      PathBuf::from("/tmp/isolate_test").join("5")
+    );
+
+    assert_eq!(sandbox.box_uid, 10000 + 5);
+    assert_eq!(sandbox.box_gid, 20000 + 5);
+    assert_eq!(sandbox.box_id, 5);
+  }
+
+  #[test]
+  fn new_sandbox_box_dir_out_of_range() {
+    let mut config = SandboxConfig::default();
+
+    config.environment.box_root = PathBuf::from("/tmp/isolate_test");
+    config.environment.first_uid = 10000;
+    config.environment.first_gid = 20000;
+    config.environment.num_boxes = 10; // valid box_ids: 0-9
+    config.security.box_id = Some(10);
+
+    let mock = MockSystem {
+      euid: Uid::from_raw(0),
+      egid: Gid::from_raw(0),
+      uid: Uid::from_raw(0),
+      gid: Gid::from_raw(0),
+      setegid_errno: None,
+      last_umask: RefCell::new(None),
+    };
+
+    let result = Sandbox::with_system(config, &mock);
+
+    match result {
+      Err(Error::ConfigError(msg)) => {
+        assert!(
+          msg.contains("sandbox id out of range"),
+          "Unexpected error message: {}",
+          msg
+        );
+      }
+      _ => panic!("Expected ConfigError due to box_id out of range"),
+    }
   }
 }
