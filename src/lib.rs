@@ -14,6 +14,69 @@ mod system;
 
 type Result<T = (), E = Error> = std::result::Result<T, E>;
 
+#[derive(Debug, Default)]
+pub struct BehaviorConfig {
+  /// Inherit all variables from the parent.
+  ///
+  /// UNIX processes normally inherit all environment variables from their
+  /// parent. The sandbox however passes only those variables which are
+  /// explicitly requested by environment rules.
+  pub full_env: bool,
+
+  /// Tell the sandbox manager to keep silence.
+  ///
+  /// No status messages are printed to stderr except for fatal errors of the
+  /// sandbox itself.
+  ///
+  /// The combination of `verbose` and `silent` has an undefined effect.
+  pub silent: bool,
+
+  /// Multiple instances of Isolate cannot manage the same sandbox
+  /// simultaneously.
+  ///
+  /// If you attempt to do that, the new instance refuses to run.
+  ///
+  /// With this option, the new instance waits for the other instance to
+  /// finish.
+  pub wait: bool,
+
+  /// Tell the sandbox manager to be verbose and report on what is going on.
+  pub verbose: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CgroupConfig {
+  /// CPU set configuration (e.g., "0-3,5,7")
+  ///
+  /// See linux/Documentation/cgroups/cpusets.txt for precise syntax.
+  pub cpuset: Option<String>,
+
+  /// Memory limit for the entire control group in kilobytes.
+  pub memory_limit: Option<u32>,
+
+  /// Memory nodes configuration (e.g., "0,1")
+  ///
+  /// See linux/Documentation/cgroups/cpusets.txt for precise syntax.
+  pub memset: Option<String>,
+
+  /// Control group under which we place our subgroups
+  ///
+  /// Either an explicit path to a subdirectory in cgroupfs, or "auto:file" to
+  /// read the path from "file", where it is put by isolate-cg-helper.
+  pub root: PathBuf,
+}
+
+impl Default for CgroupConfig {
+  fn default() -> Self {
+    Self {
+      cpuset: None,
+      memory_limit: None,
+      memset: None,
+      root: PathBuf::from("auto:/run/isolate/cgroup"),
+    }
+  }
+}
+
 #[derive(Debug)]
 pub struct EnvironmentConfig {
   /// All sandboxes are created under this directory.
@@ -51,96 +114,33 @@ impl Default for EnvironmentConfig {
   }
 }
 
-#[derive(Debug)]
-pub struct SandboxConfig {
-  /// Sandbox behavior settings.
-  pub behavior: BehaviorConfig,
-  /// Control group configuration (optional).
-  pub cgroup: Option<CgroupConfig>,
-  /// Global environment configuration.
-  pub environment: EnvironmentConfig,
-  /// Filesystem and directory configuration.
-  pub fs: FilesystemConfig,
-  /// Input/Output configuration.
-  pub io: IoConfig,
-  /// Program execution limits and constraints.
-  pub program: ProgramConfig,
-  /// Core sandbox security and identity settings.
-  pub security: SecurityConfig,
+#[derive(Debug, Default)]
+pub struct FilesystemConfig {
+  /// Change directory to a specified path before executing the program.
+  ///
+  /// This path must be relative to the root of the sandbox.
+  pub cwd: Option<PathBuf>,
+
+  /// Directory rules for mounting.
+  pub dir_rules: Vec<DirRule>,
+
+  /// Do not bind the default set of directories.
+  ///
+  /// Care has to be taken to specify the correct set of rules (using
+  /// `dir_rules`) for the executed program to run correctly.
+  ///
+  /// In particular, +/box+ has to be bound.
+  pub no_default_dirs: bool,
+
+  /// By default, Isolate removes all special files (other than regular files
+  /// and directories) created inside the sandbox.
+  ///
+  /// If you need them, this option disables that behavior, but you need to
+  /// carefully check what you open.
+  pub special_files: bool,
 }
 
-impl Default for SandboxConfig {
-  fn default() -> Self {
-    Self {
-      behavior: BehaviorConfig::default(),
-      cgroup: None,
-      environment: EnvironmentConfig::default(),
-      fs: FilesystemConfig::default(),
-      io: IoConfig::default(),
-      program: ProgramConfig::default(),
-      security: SecurityConfig::default(),
-    }
-  }
-}
-
-#[derive(Debug)]
-pub struct SecurityConfig {
-  /// Act on behalf of the specified user ID (only if Isolate was invoked by
-  /// root).
-  ///
-  /// This is used in scenarios where a root-controlled process
-  /// manages creation of sandboxes for regular users, usually in conjunction
-  /// with the `restricted_init` option in the configuration file.
-  pub as_uid: Option<u32>,
-
-  /// Act on behalf of the specified group ID (only if Isolate was invoked by
-  /// root).
-  ///
-  /// This is used in scenarios where a root-controlled process
-  /// manages creation of sandboxes for regular users, usually in conjunction
-  /// with the `restricted_init` option in the configuration file.
-  pub as_gid: Option<u32>,
-
-  /// When you run multiple sandboxes in parallel,
-  /// you have to assign unique IDs to them by this option.
-  ///
-  /// This defaults to 0.
-  pub box_id: Option<u32>,
-
-  /// By default, isolate closes all file descriptors passed from its parent
-  /// except for descriptors 0, 1, and 2.
-  ///
-  /// This prevents unintentional descriptor leaks. In some cases, passing
-  /// extra descriptors to the sandbox can be desirable, so you can use this
-  /// switch to make them survive.
-  pub inherit_fds: bool,
-
-  /// By default, isolate creates a new network namespace for its child
-  /// process.
-  ///
-  /// This namespace contains no network devices except for a
-  /// per-namespace loopback.
-  ///
-  /// This prevents the program from communicating with the outside world.
-  ///
-  /// If you want to permit communication, you can use this switch to keep the
-  /// child process in the parent's network namespace.
-  pub share_net: bool,
-}
-
-impl Default for SecurityConfig {
-  fn default() -> Self {
-    Self {
-      as_uid: None,
-      as_gid: None,
-      box_id: Some(0),
-      inherit_fds: false,
-      share_net: false,
-    }
-  }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct IoConfig {
   /// Redirect standard input from a file.
   ///
@@ -194,140 +194,6 @@ pub struct IoConfig {
   pub tty_hack: bool,
 }
 
-impl Default for IoConfig {
-  fn default() -> Self {
-    Self {
-      stdin: None,
-      stdout: None,
-      stderr: None,
-      stderr_to_stdout: false,
-      tty_hack: false,
-    }
-  }
-}
-
-#[derive(Debug)]
-pub struct FilesystemConfig {
-  /// Change directory to a specified path before executing the program.
-  ///
-  /// This path must be relative to the root of the sandbox.
-  pub cwd: Option<PathBuf>,
-
-  /// Directory rules for mounting.
-  pub dir_rules: Vec<DirRule>,
-
-  /// Do not bind the default set of directories.
-  ///
-  /// Care has to be taken to specify the correct set of rules (using
-  /// `dir_rules`) for the executed program to run correctly.
-  ///
-  /// In particular, +/box+ has to be bound.
-  pub no_default_dirs: bool,
-
-  /// By default, Isolate removes all special files (other than regular files
-  /// and directories) created inside the sandbox.
-  ///
-  /// If you need them, this option disables that behavior, but you need to
-  /// carefully check what you open.
-  pub special_files: bool,
-}
-
-impl Default for FilesystemConfig {
-  fn default() -> Self {
-    Self {
-      cwd: None,
-      dir_rules: Vec::new(),
-      no_default_dirs: false,
-      special_files: false,
-    }
-  }
-}
-
-#[derive(Debug)]
-pub struct BehaviorConfig {
-  /// Inherit all variables from the parent.
-  ///
-  /// UNIX processes normally inherit all environment variables from their
-  /// parent. The sandbox however passes only those variables which are
-  /// explicitly requested by environment rules.
-  pub full_env: bool,
-
-  /// Tell the sandbox manager to keep silence.
-  ///
-  /// No status messages are printed to stderr except for fatal errors of the
-  /// sandbox itself.
-  ///
-  /// The combination of `verbose` and `silent` has an undefined effect.
-  pub silent: bool,
-
-  /// Multiple instances of Isolate cannot manage the same sandbox
-  /// simultaneously.
-  ///
-  /// If you attempt to do that, the new instance refuses to run.
-  ///
-  /// With this option, the new instance waits for the other instance to
-  /// finish.
-  pub wait: bool,
-
-  /// Tell the sandbox manager to be verbose and report on what is going on.
-  pub verbose: bool,
-}
-
-impl Default for BehaviorConfig {
-  fn default() -> Self {
-    Self {
-      full_env: false,
-      silent: false,
-      verbose: false,
-      wait: false,
-    }
-  }
-}
-
-#[derive(Debug)]
-pub struct DirRule {
-  /// Path inside the sandbox where the directory will be mounted.
-  pub inside_path: PathBuf,
-  /// Path outside the sandbox to be mounted.
-  pub outside_path: Option<PathBuf>,
-  /// Mount options for this directory.
-  pub options: DirOptions,
-}
-
-#[derive(Debug, Default)]
-pub struct DirOptions {
-  /// Allow read-write access.
-  pub read_write: bool,
-
-  /// Allow access to character and block devices.
-  pub allow_devices: bool,
-
-  /// Disallow execution of binaries.
-  pub no_exec: bool,
-
-  /// Silently ignore the rule if the directory to be bound does not exist.
-  pub maybe: bool,
-
-  /// Instead of binding a directory, mount a device-less filesystem called
-  /// 'inside_path'.
-  ///
-  /// For example, this can be 'proc' or 'sysfs'.
-  pub filesystem: Option<String>,
-
-  /// Bind a freshly created temporary directory writeable for the sandbox
-  /// user.
-  ///
-  /// Accepts no 'outside_path', implies `rw`.
-  pub temporary: bool,
-
-  /// Do not bind recursively.
-  ///
-  /// Without this option, mount points in the outside directory tree are
-  /// automatically propagated to the sandbox.
-  pub no_recursive: bool,
-}
-
-/// Program execution configuration and resource limits
 #[derive(Debug)]
 pub struct ProgramConfig {
   /// Limit address space of the program to 'size' kilobytes.
@@ -467,37 +333,104 @@ impl Default for ProgramConfig {
   }
 }
 
-#[derive(Debug, Clone)]
-pub struct CgroupConfig {
-  /// CPU set configuration (e.g., "0-3,5,7")
+#[derive(Debug)]
+pub struct SecurityConfig {
+  /// Act on behalf of the specified user ID (only if Isolate was invoked by
+  /// root).
   ///
-  /// See linux/Documentation/cgroups/cpusets.txt for precise syntax.
-  pub cpuset: Option<String>,
+  /// This is used in scenarios where a root-controlled process
+  /// manages creation of sandboxes for regular users, usually in conjunction
+  /// with the `restricted_init` option in the configuration file.
+  pub as_uid: Option<u32>,
 
-  /// Memory limit for the entire control group in kilobytes.
-  pub memory_limit: Option<u32>,
-
-  /// Memory nodes configuration (e.g., "0,1")
+  /// Act on behalf of the specified group ID (only if Isolate was invoked by
+  /// root).
   ///
-  /// See linux/Documentation/cgroups/cpusets.txt for precise syntax.
-  pub memset: Option<String>,
+  /// This is used in scenarios where a root-controlled process
+  /// manages creation of sandboxes for regular users, usually in conjunction
+  /// with the `restricted_init` option in the configuration file.
+  pub as_gid: Option<u32>,
 
-  /// Control group under which we place our subgroups
+  /// When you run multiple sandboxes in parallel,
+  /// you have to assign unique IDs to them by this option.
   ///
-  /// Either an explicit path to a subdirectory in cgroupfs, or "auto:file" to
-  /// read the path from "file", where it is put by isolate-cg-helper.
-  pub root: PathBuf,
+  /// This defaults to 0.
+  pub box_id: Option<u32>,
+
+  /// By default, isolate closes all file descriptors passed from its parent
+  /// except for descriptors 0, 1, and 2.
+  ///
+  /// This prevents unintentional descriptor leaks. In some cases, passing
+  /// extra descriptors to the sandbox can be desirable, so you can use this
+  /// switch to make them survive.
+  pub inherit_fds: bool,
+
+  /// By default, isolate creates a new network namespace for its child
+  /// process.
+  ///
+  /// This namespace contains no network devices except for a
+  /// per-namespace loopback.
+  ///
+  /// This prevents the program from communicating with the outside world.
+  ///
+  /// If you want to permit communication, you can use this switch to keep the
+  /// child process in the parent's network namespace.
+  pub share_net: bool,
 }
 
-impl Default for CgroupConfig {
+impl Default for SecurityConfig {
   fn default() -> Self {
     Self {
-      cpuset: None,
-      memory_limit: None,
-      memset: None,
-      root: PathBuf::from("auto:/run/isolate/cgroup"),
+      as_uid: None,
+      as_gid: None,
+      box_id: Some(0),
+      inherit_fds: false,
+      share_net: false,
     }
   }
+}
+
+#[derive(Debug)]
+pub struct DirRule {
+  /// Path inside the sandbox where the directory will be mounted.
+  pub inside_path: PathBuf,
+  /// Path outside the sandbox to be mounted.
+  pub outside_path: Option<PathBuf>,
+  /// Mount options for this directory.
+  pub options: DirOptions,
+}
+
+#[derive(Debug, Default)]
+pub struct DirOptions {
+  /// Allow read-write access.
+  pub read_write: bool,
+
+  /// Allow access to character and block devices.
+  pub allow_devices: bool,
+
+  /// Disallow execution of binaries.
+  pub no_exec: bool,
+
+  /// Silently ignore the rule if the directory to be bound does not exist.
+  pub maybe: bool,
+
+  /// Instead of binding a directory, mount a device-less filesystem called
+  /// 'inside_path'.
+  ///
+  /// For example, this can be 'proc' or 'sysfs'.
+  pub filesystem: Option<String>,
+
+  /// Bind a freshly created temporary directory writeable for the sandbox
+  /// user.
+  ///
+  /// Accepts no 'outside_path', implies `rw`.
+  pub temporary: bool,
+
+  /// Do not bind recursively.
+  ///
+  /// Without this option, mount points in the outside directory tree are
+  /// automatically propagated to the sandbox.
+  pub no_recursive: bool,
 }
 
 #[derive(Debug, Default)]
@@ -554,6 +487,24 @@ pub struct Meta {
   pub time_wall: f64,
 }
 
+#[derive(Debug, Default)]
+pub struct SandboxConfig {
+  /// Sandbox behavior settings.
+  pub behavior: BehaviorConfig,
+  /// Control group configuration (optional).
+  pub cgroup: Option<CgroupConfig>,
+  /// Global environment configuration.
+  pub environment: EnvironmentConfig,
+  /// Filesystem and directory configuration.
+  pub fs: FilesystemConfig,
+  /// Input/Output configuration.
+  pub io: IoConfig,
+  /// Program execution limits and constraints.
+  pub program: ProgramConfig,
+  /// Core sandbox security and identity settings.
+  pub security: SecurityConfig,
+}
+
 #[derive(Debug)]
 pub struct Sandbox {
   /// The directory for the sandbox (cf_box_root/<box_id>).
@@ -587,21 +538,21 @@ impl Sandbox {
     if system.getegid().as_raw() != 0 {
       system
         .setegid(0)
-        .map_err(|e| Error::PermissionError(format!("cannot switch to root group: {}", e)))?;
+        .map_err(|e| Error::Permission(format!("cannot switch to root group: {}", e)))?;
     }
 
     let (original_uid, original_gid) = (system.getuid().as_raw(), system.getgid().as_raw());
 
     let (original_uid, original_gid) = match (config.security.as_uid, config.security.as_gid) {
-      (Some(_), Some(_)) if !(original_uid == 0) => {
-        return Err(Error::PermissionError(
+      (Some(_), Some(_)) if original_uid != 0 => {
+        return Err(Error::Permission(
           "you must be root to use `as_uid` or `as_gid`".into(),
         ));
       }
       (Some(uid), Some(gid)) => (uid, gid),
       (None, None) => (original_uid, original_gid),
       _ => {
-        return Err(Error::ConfigError(
+        return Err(Error::Config(
           "`as_uid` and `as_gid` must be used either both or none".into(),
         ))
       }
@@ -612,7 +563,7 @@ impl Sandbox {
     let box_id = config.security.box_id.unwrap_or(0);
 
     if box_id >= config.environment.num_boxes {
-      return Err(Error::ConfigError(format!(
+      return Err(Error::Config(format!(
         "sandbox id out of range (allowed: 0-{})",
         config.environment.num_boxes - 1
       )));
@@ -772,7 +723,7 @@ mod tests {
 
     assert_matches!(
       result,
-      Err(Error::PermissionError(message)) if message.contains("cannot switch to root group")
+      Err(Error::Permission(message)) if message.contains("cannot switch to root group")
     );
   }
 
@@ -793,7 +744,7 @@ mod tests {
 
     assert_matches!(
       result,
-      Err(Error::PermissionError(message)) if message.contains("cannot switch to root group")
+      Err(Error::Permission(message)) if message.contains("cannot switch to root group")
     );
   }
 
@@ -821,7 +772,7 @@ mod tests {
 
     assert_matches!(
       result,
-      Err(Error::PermissionError(message)) if message.contains("you must be root to use `as_uid` or `as_gid`")
+      Err(Error::Permission(message)) if message.contains("you must be root to use `as_uid` or `as_gid`")
     );
   }
 
@@ -848,7 +799,7 @@ mod tests {
 
     assert_matches!(
       result,
-      Err(Error::ConfigError(message)) if message.contains("`as_uid` and `as_gid` must be used either both or none")
+      Err(Error::Config(message)) if message.contains("`as_uid` and `as_gid` must be used either both or none")
     );
   }
 
@@ -973,7 +924,7 @@ mod tests {
 
     assert_matches!(
       result,
-      Err(Error::ConfigError(message)) if message.contains("sandbox id out of range")
+      Err(Error::Config(message)) if message.contains("sandbox id out of range")
     );
   }
 }

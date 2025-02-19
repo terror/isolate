@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUSTFLAGS: --deny warnings
+
+jobs:
+  all:
+    name: All
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download actionlint
+        id: actionlint
+        run:
+          bash <(curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+
+      - name: Check workflow
+        run: ${{ steps.actionlint.outputs.executable }} -color
+
+      - name: Install rust toolchain components
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Info
+        run: |
+          rustup --version
+          cargo --version
+          cargo clippy --version
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Forbid
+        run: |
+          sudo apt-get install ripgrep
+          ./bin/forbid
+
+      - name: Build
+        run: cargo build
+
+      - name: Lockfile
+        run: cargo update --locked --package isolate
+
+      - name: Test
+        run: cargo test
