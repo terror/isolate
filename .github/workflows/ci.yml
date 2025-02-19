@@ -16,9 +16,7 @@ env:
   RUSTFLAGS: --deny warnings
 
 jobs:
-  all:
-    name: All
-
+  check-workflow:
     runs-on: ubuntu-latest
 
     steps:
@@ -31,6 +29,12 @@ jobs:
 
       - name: Check workflow
         run: ${{ steps.actionlint.outputs.executable }} -color
+
+  setup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Install rust toolchain components
         uses: dtolnay/rust-toolchain@stable
@@ -46,6 +50,14 @@ jobs:
           cargo --version
           cargo clippy --version
 
+  lint:
+    needs: setup
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
       - name: Clippy
         run: cargo clippy --all-targets --all-features
 
@@ -57,11 +69,34 @@ jobs:
           sudo apt-get install ripgrep
           ./bin/forbid
 
+  build:
+    needs: setup
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
       - name: Build
         run: cargo build
 
-      - name: Lockfile
-        run: cargo update --locked --package isolate
+  test:
+    needs: build
 
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
       - name: Test
         run: cargo test
+
+  lock:
+    needs: setup
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lockfile
+        run: cargo update --locked --package isolate
