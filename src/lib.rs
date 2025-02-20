@@ -87,6 +87,25 @@ impl Sandbox {
       )));
     }
 
+    // The sandboxed process gets its own filesystem namespace, which contains only subtrees
+    // requested by directory rules.
+    //
+    // By default, all directories are bound read-only and restricted (no devices,
+    // no setuid binaries). This behavior can be modified using the 'options':
+    //
+    // Unless `no_default_dirs` is specified, the default set of directory rules binds +/bin+,
+    // +/dev+ (with devices allowed), +/lib+, +/lib64+ (if it exists), and +/usr+. It also binds
+    // the working directory to +/box+ (read-write), mounts the proc filesystem at +/proc+, and
+    // creates a temporary directory +/tmp+.
+    //
+    // The rules are executed in the order in which they are given. Default rules come before
+    // all user rules. When a rule is replaced, it retains the original position
+    // in the order. This matters when one rule's 'in' is a sub-directory of another
+    // rule's 'in'. For example if you first bind to 'a' and then to 'a/b', it will work as
+    // expected, but a sub-directory 'b' must have existed in the directory bound to 'a' (isolate
+    // never creates subdirectories in bound directories for security reasons). If the
+    // order is 'a/b' before 'a', then the directory bound to 'a/b' becomes invisible
+    // by the later binding on 'a'.
     let default_dir_rules = vec![
       DirRule::new(
         "box",
@@ -127,6 +146,7 @@ impl Sandbox {
         None::<&Path>,
         DirOptions {
           temporary: true,
+          read_write: true,
           ..Default::default()
         },
       )?,
@@ -150,19 +170,12 @@ impl Sandbox {
     })
   }
 
-  pub fn add_dir_rule(&mut self, _rule: DirRule) -> Result {
-    if !self.initialized {
-      return Err(Error::NotInitialized);
-    }
-
-    todo!("Add directory rule to sandbox");
+  pub fn add_dir_rule(&mut self, rule: DirRule) -> Result {
+    self.dir_rules.push(rule);
+    Ok(())
   }
 
   pub fn add_env_rule(&mut self, _var: &str, _value: Option<&str>) -> Result {
-    if !self.initialized {
-      return Err(Error::NotInitialized);
-    }
-
     todo!("Add environment rule to sandbox");
   }
 

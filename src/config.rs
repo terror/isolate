@@ -1,6 +1,46 @@
 use super::*;
 
 #[derive(Debug)]
+pub struct CgroupConfig {
+  /// Defines the CPU cores available for this control group using the cpuset format.
+  ///
+  /// For example, `"0-3,5,7"` restricts processes to cores 0, 1, 2, 3, 5, and 7.
+  /// Refer to the [cpusets documentation](https://docs.kernel.org/admin-guide/cgroup-v1/cpusets.html) for valid syntax.
+  pub cpu_cores: Option<String>,
+
+  /// Specifies the maximum memory allocation for the control group, in kilobytes.
+  ///
+  /// This value limits the total memory usage of all tasks within the group.
+  pub memory_limit: Option<u32>,
+
+  /// Configures the memory nodes that this control group can access.
+  ///
+  /// For example, `"0,1"` allows usage of memory nodes 0 and 1.
+  ///
+  /// The format follows the same rules as for CPU sets; see the
+  /// [cpusets documentation](https://docs.kernel.org/admin-guide/cgroup-v1/cpusets.html) for more details.
+  pub memory_nodes: Option<String>,
+
+  /// Specifies the root directory under which all subgroup control groups will be created.
+  ///
+  /// This can be either:
+  /// - A fixed path in the cgroup filesystem, or
+  /// - A dynamic path specified as `"auto:file"`, where the actual path is read from `file`
+  pub root: PathBuf,
+}
+
+impl Default for CgroupConfig {
+  fn default() -> Self {
+    Self {
+      cpu_cores: None,
+      memory_limit: None,
+      memory_nodes: None,
+      root: PathBuf::from("auto:/run/isolate/cgroup"),
+    }
+  }
+}
+
+#[derive(Debug)]
 pub struct Config {
   /// Act on behalf of the specified group ID (only if Isolate was invoked by
   /// root).
@@ -37,24 +77,8 @@ pub struct Config {
   /// This defaults to 0.
   pub box_id: Option<u32>,
 
-  /// CPU set configuration (e.g., "0-3,5,7").
-  ///
-  /// See cpusets documentation for syntax: https://docs.kernel.org/admin-guide/cgroup-v1/cpusets.html.
-  pub cg_cpus: Option<String>,
-
-  /// Memory limit for the entire control group in kilobytes.
-  pub cg_memory_limit: Option<u32>,
-
-  /// Memory nodes configuration (e.g., "0,1").
-  ///
-  /// See cpusets documentation for syntax: https://docs.kernel.org/admin-guide/cgroup-v1/cpusets.html.
-  pub cg_mems: Option<String>,
-
-  /// Control group under which we place our subgroups.
-  ///
-  /// Either an explicit path to a subdirectory in cgroupfs, or "auto:file" to
-  /// read the path from "file", where it is put by isolate-cg-helper.
-  pub cg_root: Option<PathBuf>,
+  /// Control group configuration.
+  pub cgroup: Option<CgroupConfig>,
 
   /// Limit size of core files created when a process crashes to 'size'
   /// kilobytes.
@@ -62,11 +86,6 @@ pub struct Config {
   /// Defaults to zero, meaning that no core files are produced inside the
   /// sandbox.
   pub core_size_limit: Option<u32>,
-
-  /// Change directory to a specified path before executing the program.
-  ///
-  /// This path must be relative to the root of the sandbox.
-  pub cwd: Option<PathBuf>,
 
   /// When the `time` limit is exceeded, do not kill the program immediately,
   /// but wait until `extra_time` seconds elapse since the start of the
@@ -91,13 +110,6 @@ pub struct Config {
   /// EFBIG and the program receives the SIGXFSZ signal.
   pub file_size_limit: Option<u32>,
 
-  /// Inherit all variables from the parent.
-  ///
-  /// UNIX processes normally inherit all environment variables from their
-  /// parent. The sandbox however passes only those variables which are
-  /// explicitly requested by environment rules.
-  pub full_env: bool,
-
   /// Set disk quota to a given number of inodes.
   ///
   /// This requires the filesystem to be mounted with support for quotas.
@@ -111,6 +123,13 @@ pub struct Config {
   /// If the quota is reached, system calls expanding files fail with error
   /// EDQUOT.
   pub inode_quota: Option<u32>,
+
+  /// Inherit all variables from the parent.
+  ///
+  /// UNIX processes normally inherit all environment variables from their
+  /// parent. The sandbox however passes only those variables which are
+  /// explicitly requested by environment rules.
+  pub inherit_env: bool,
 
   /// By default, isolate closes all file descriptors passed from its parent
   /// except for descriptors 0, 1, and 2.
@@ -278,6 +297,11 @@ pub struct Config {
   ///
   /// If this limit is exceeded, the program is killed.
   pub wall_time_limit: Option<f64>,
+
+  /// Change directory to a specified path before executing the program.
+  ///
+  /// This path must be relative to the root of the sandbox.
+  pub working_directory: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -287,15 +311,11 @@ impl Default for Config {
       as_uid: None,
       block_quota: None,
       box_id: Some(0),
-      cg_cpus: None,
-      cg_memory_limit: None,
-      cg_mems: None,
-      cg_root: Some(PathBuf::from("auto:/run/isolate/cgroup")),
+      cgroup: None,
       core_size_limit: Some(0),
-      cwd: None,
       extra_time: Some(0.5),
       file_size_limit: Some(8192),
-      full_env: false,
+      inherit_env: false,
       inherit_fds: false,
       inode_quota: None,
       memory_limit: Some(256_000),
@@ -315,6 +335,7 @@ impl Default for Config {
       verbose: false,
       wait: false,
       wall_time_limit: Some(5.0),
+      working_directory: None,
     }
   }
 }

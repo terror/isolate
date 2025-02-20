@@ -103,7 +103,10 @@ mod tests {
       options,
     );
 
-    assert_matches!(rule, Err(Error::DirRule(_)));
+    assert_matches!(
+      rule,
+      Err(Error::DirRule(message)) if message.contains("temporary directory cannot have an outside path")
+    );
   }
 
   #[test]
