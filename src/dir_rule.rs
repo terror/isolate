@@ -34,11 +34,89 @@ pub struct DirOptions {
 }
 
 #[derive(Debug)]
+#[allow(unused)]
 pub struct DirRule {
   /// Path inside the sandbox where the directory will be mounted.
-  pub inside_path: PathBuf,
+  inside_path: PathBuf,
   /// Path outside the sandbox to be mounted.
-  pub outside_path: Option<PathBuf>,
+  outside_path: Option<PathBuf>,
   /// Mount options for this directory.
-  pub options: DirOptions,
+  options: DirOptions,
+}
+
+impl DirRule {
+  pub fn new(
+    inside_path: impl AsRef<Path>,
+    outside_path: Option<impl AsRef<Path>>,
+    options: DirOptions,
+  ) -> Result<Self> {
+    let inside_path = inside_path.as_ref();
+
+    if options.temporary && outside_path.is_some() {
+      return Err(Error::DirRule(
+        "temporary directory cannot have an outside path".to_string(),
+      ));
+    }
+
+    let read_write = if options.temporary {
+      true
+    } else {
+      options.read_write
+    };
+
+    Ok(Self {
+      inside_path: inside_path.to_path_buf(),
+      outside_path: outside_path.map(|p| p.as_ref().to_path_buf()),
+      options: DirOptions {
+        read_write,
+        ..options
+      },
+    })
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use {super::*, assert_matches::assert_matches};
+
+  #[test]
+  fn valid_dir_rule() {
+    let rule = DirRule::new(
+      Path::new("/sandbox/path"),
+      Some(Path::new("/host/path")),
+      DirOptions::default(),
+    );
+
+    assert!(rule.is_ok());
+  }
+
+  #[test]
+  fn temporary_with_outside_path() {
+    let options = DirOptions {
+      temporary: true,
+      ..Default::default()
+    };
+
+    let rule = DirRule::new(
+      Path::new("/sandbox/path"),
+      Some(Path::new("/host/path")),
+      options,
+    );
+
+    assert_matches!(rule, Err(Error::DirRule(_)));
+  }
+
+  #[test]
+  fn temporary_implies_read_write() {
+    let options = DirOptions {
+      temporary: true,
+      read_write: false,
+      ..Default::default()
+    };
+
+    let rule = DirRule::new(Path::new("/sandbox/path"), None::<&Path>, options);
+
+    assert!(rule.is_ok());
+    assert!(rule.unwrap().options.read_write);
+  }
 }

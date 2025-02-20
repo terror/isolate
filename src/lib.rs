@@ -8,7 +8,7 @@ use {
     sys::stat::{umask, Mode},
     unistd::{getegid, geteuid, getgid, getuid, setegid, Gid, Uid},
   },
-  std::path::PathBuf,
+  std::path::{Path, PathBuf},
   system::{MaterialSystem, System},
   thiserror::Error,
 };
@@ -61,7 +61,7 @@ impl Sandbox {
 
     let (original_uid, original_gid) = (system.getuid().as_raw(), system.getgid().as_raw());
 
-    let (original_uid, original_gid) = match (config.security.as_uid, config.security.as_gid) {
+    let (original_uid, original_gid) = match (config.as_uid, config.as_gid) {
       (Some(_), Some(_)) if original_uid != 0 => {
         return Err(Error::Permission(
           "you must be root to use `as_uid` or `as_gid`".into(),
@@ -78,7 +78,7 @@ impl Sandbox {
 
     system.umask(Mode::from_bits_truncate(0o022));
 
-    let box_id = config.security.box_id.unwrap_or(0);
+    let box_id = config.box_id.unwrap_or(0);
 
     if box_id >= environment.num_boxes {
       return Err(Error::Config(format!(
@@ -88,65 +88,52 @@ impl Sandbox {
     }
 
     let default_dir_rules = vec![
-      DirRule {
-        inside_path: PathBuf::from("box"),
-        outside_path: Some(PathBuf::from("./box")),
-        options: DirOptions {
+      DirRule::new(
+        "box",
+        Some("./box"),
+        DirOptions {
           read_write: true,
           ..Default::default()
         },
-      },
-      DirRule {
-        inside_path: PathBuf::from("bin"),
-        outside_path: None,
-        options: Default::default(),
-      },
-      DirRule {
-        inside_path: PathBuf::from("dev"),
-        outside_path: None,
-        options: DirOptions {
+      )?,
+      DirRule::new("bin", None::<&Path>, Default::default())?,
+      DirRule::new(
+        "dev",
+        None::<&Path>,
+        DirOptions {
           allow_devices: true,
           ..Default::default()
         },
-      },
-      DirRule {
-        inside_path: PathBuf::from("lib"),
-        outside_path: None,
-        options: Default::default(),
-      },
-      DirRule {
-        inside_path: PathBuf::from("lib64"),
-        outside_path: None,
-        options: DirOptions {
+      )?,
+      DirRule::new("lib", None::<&Path>, Default::default())?,
+      DirRule::new(
+        "lib64",
+        None::<&Path>,
+        DirOptions {
           maybe: true,
           ..Default::default()
         },
-      },
-      DirRule {
-        inside_path: PathBuf::from("proc"),
-        outside_path: Some(PathBuf::from("proc")),
-        options: DirOptions {
+      )?,
+      DirRule::new(
+        "proc",
+        Some("proc"),
+        DirOptions {
           filesystem: Some("proc".to_string()),
           ..Default::default()
         },
-      },
-      DirRule {
-        inside_path: PathBuf::from("tmp"),
-        outside_path: None,
-        options: DirOptions {
+      )?,
+      DirRule::new(
+        "tmp",
+        None::<&Path>,
+        DirOptions {
           temporary: true,
           ..Default::default()
         },
-      },
-      DirRule {
-        inside_path: PathBuf::from("usr"),
-        outside_path: None,
-        options: Default::default(),
-      },
+      )?,
+      DirRule::new("usr", None::<&Path>, Default::default())?,
     ];
 
     let dir_rules = config
-      .fs
       .no_default_dirs
       .then_some(default_dir_rules)
       .unwrap_or_default();
@@ -212,7 +199,7 @@ mod tests {
   use {
     super::*,
     assert_matches::assert_matches,
-    config::{Config, Security},
+    config::Config,
     nix::{
       errno::Errno,
       sys::stat::Mode,
@@ -265,8 +252,8 @@ mod tests {
   fn sandbox_config_defaults() {
     let config = Config::default();
 
-    assert_eq!(config.security.box_id, Some(0));
-    assert_eq!(config.program.open_files_limit, Some(64));
+    assert_eq!(config.box_id, Some(0));
+    assert_eq!(config.open_files_limit, Some(64));
   }
 
   #[test]
@@ -332,11 +319,8 @@ mod tests {
   #[test]
   fn new_sandbox_as_uid_as_gid_non_root_original() {
     let config = Config {
-      security: Security {
-        as_uid: Some(2000),
-        as_gid: Some(2000),
-        ..Default::default()
-      },
+      as_uid: Some(2000),
+      as_gid: Some(2000),
       ..Default::default()
     };
 
@@ -360,10 +344,7 @@ mod tests {
   #[test]
   fn new_sandbox_as_uid_without_as_gid() {
     let config = Config {
-      security: Security {
-        as_uid: Some(2000),
-        ..Default::default()
-      },
+      as_uid: Some(2000),
       ..Default::default()
     };
 
@@ -413,11 +394,8 @@ mod tests {
   #[test]
   fn new_sandbox_valid_with_as() {
     let config = Config {
-      security: Security {
-        as_uid: Some(2000),
-        as_gid: Some(2000),
-        ..Default::default()
-      },
+      as_uid: Some(2000),
+      as_gid: Some(2000),
       ..Default::default()
     };
 
@@ -450,10 +428,7 @@ mod tests {
     };
 
     let config = Config {
-      security: Security {
-        box_id: Some(5),
-        ..Default::default()
-      },
+      box_id: Some(5),
       ..Default::default()
     };
 
@@ -490,10 +465,7 @@ mod tests {
     };
 
     let config = Config {
-      security: Security {
-        box_id: Some(10),
-        ..Default::default()
-      },
+      box_id: Some(10),
       ..Default::default()
     };
 
