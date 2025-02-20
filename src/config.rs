@@ -71,12 +71,6 @@ pub struct Config {
   /// EDQUOT.
   pub block_quota: Option<u32>,
 
-  /// When you run multiple sandboxes in parallel,
-  /// you have to assign unique IDs to them by this option.
-  ///
-  /// This defaults to 0.
-  pub box_id: Option<u32>,
-
   /// Control group configuration.
   pub cgroup: Option<CgroupConfig>,
 
@@ -174,6 +168,12 @@ pub struct Config {
   /// If this limit is exceeded, system calls creating processes fail with
   /// error EAGAIN.
   pub process_limit: Option<u32>,
+
+  /// When you run multiple sandboxes in parallel,
+  /// you have to assign unique IDs to them by this option.
+  ///
+  /// This defaults to 0.
+  pub sandbox_id: Option<u32>,
 
   /// By default, isolate creates a new network namespace for its child
   /// process.
@@ -310,7 +310,6 @@ impl Default for Config {
       as_gid: None,
       as_uid: None,
       block_quota: None,
-      box_id: Some(0),
       cgroup: None,
       core_size_limit: Some(0),
       extra_time: Some(0.5),
@@ -322,6 +321,7 @@ impl Default for Config {
       no_default_dirs: false,
       open_files_limit: Some(64),
       process_limit: Some(1),
+      sandbox_id: Some(0),
       share_net: false,
       silent: false,
       special_files: false,
@@ -337,5 +337,69 @@ impl Default for Config {
       wall_time_limit: Some(5.0),
       working_directory: None,
     }
+  }
+}
+
+impl Config {
+  pub fn credentials(&self, system: &impl System) -> Result<(u32, u32)> {
+    let (uid, gid) = (system.getuid().as_raw(), system.getgid().as_raw());
+
+    match (self.as_uid, self.as_gid) {
+      (Some(_), Some(_)) if uid != 0 => Err(Error::Permission(
+        "you must be root to use `as_uid` or `as_gid`".into(),
+      )),
+      (Some(as_uid), Some(as_gid)) => Ok((as_uid, as_gid)),
+      (None, None) => Ok((uid, gid)),
+      _ => Err(Error::Config(
+        "`as_uid` and `as_gid` must be used either both or none".into(),
+      )),
+    }
+  }
+
+  /// The sandboxed process gets its own filesystem namespace, which contains only paths
+  /// specified by mount configurations.
+  ///
+  /// By default, all mounts are created read-only and restricted (no devices,
+  /// no setuid binaries). This behavior can be modified using `MountOptions`.
+  ///
+  /// Unless `no_default_dirs` is specified, the default set of mounts includes:
+  /// - `/bin` (read-only)
+  /// - `/dev` (with devices allowed)
+  /// - `/lib` (read-only)
+  /// - `/lib64` (read-only, optional)
+  /// - `/usr` (read-only)
+  /// - `/box` (read-write, bound to working directory)
+  /// - `/proc` (proc filesystem)
+  /// - `/tmp` (temporary directory, read-write)
+  ///
+  /// Mounts are processed in the order they are specified, with default mounts preceding
+  /// user-defined ones. When a mount is replaced, it maintains its original position
+  /// in the sequence.
+  ///
+  /// This ordering is significant when one mount's `inside_path` is a subdirectory of another
+  /// mount's `inside_path`.
+  ///
+  /// For example, mounting "a" followed by "a/b" works as expected, but subdirectory "b" must exist
+  /// in the directory mounted at "a" (the sandbox never creates subdirectories in mounted
+  /// directories for security).
+  ///
+  /// If "a/b" is mounted before "a", the mount at "a/b" becomes inaccessible due to
+  /// being overshadowed by the mount at "a".
+  pub fn default_mounts(&self) -> Result<Vec<Mount>> {
+    Ok(
+      self
+        .no_default_dirs
+        .then_some(vec![
+          Mount::read_write("box", Some("./box"))?,
+          Mount::read_only("bin", None::<&Path>)?,
+          Mount::device("dev", None::<&Path>)?,
+          Mount::read_only("lib", None::<&Path>)?,
+          Mount::optional("lib64", None::<&Path>)?,
+          Mount::filesystem("proc", "proc")?,
+          Mount::temporary("tmp")?,
+          Mount::read_only("usr", None::<&Path>)?,
+        ])
+        .unwrap_or_default(),
+    )
   }
 }

@@ -8,8 +8,8 @@ pub enum Error {
   BoxIdOutOfRange(u32, u32),
   #[error("configuration error: {0}")]
   Config(String),
-  #[error("invalid directory rule: {0}")]
-  DirRule(String),
+  #[error("invalid mount: {0}")]
+  Mount(String),
   #[error("sandbox has not been initialized")]
   NotInitialized,
   #[error("operation requires root privileges")]
