@@ -8,7 +8,10 @@ use {
     sys::stat::{umask, Mode},
     unistd::{getegid, geteuid, getgid, getuid, setegid, Gid, Uid},
   },
-  std::path::{Path, PathBuf},
+  std::{
+    fmt::{self, Display, Formatter},
+    path::{Path, PathBuf},
+  },
   system::{MaterialSystem, System},
   thiserror::Error,
 };

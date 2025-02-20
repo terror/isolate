@@ -2,17 +2,8 @@ use super::*;
 
 #[derive(Debug, Default)]
 pub struct DirOptions {
-  /// Allow read-write access.
-  pub read_write: bool,
-
   /// Allow access to character and block devices.
   pub allow_devices: bool,
-
-  /// Disallow execution of binaries.
-  pub no_exec: bool,
-
-  /// Silently ignore the rule if the directory to be bound does not exist.
-  pub maybe: bool,
 
   /// Instead of binding a directory, mount a device-less filesystem called
   /// 'inside_path'.
@@ -20,17 +11,26 @@ pub struct DirOptions {
   /// For example, this can be 'proc' or 'sysfs'.
   pub filesystem: Option<String>,
 
-  /// Bind a freshly created temporary directory writeable for the sandbox
-  /// user.
-  ///
-  /// Accepts no 'outside_path', implies `rw`.
-  pub temporary: bool,
+  /// Silently ignore the rule if the directory to be bound does not exist.
+  pub maybe: bool,
+
+  /// Disallow execution of binaries.
+  pub no_exec: bool,
 
   /// Do not bind recursively.
   ///
   /// Without this option, mount points in the outside directory tree are
   /// automatically propagated to the sandbox.
   pub no_recursive: bool,
+
+  /// Allow read-write access.
+  pub read_write: bool,
+
+  /// Bind a freshly created temporary directory writeable for the sandbox
+  /// user.
+  ///
+  /// Accepts no 'outside_path', implies `rw`.
+  pub temporary: bool,
 }
 
 #[derive(Debug)]
