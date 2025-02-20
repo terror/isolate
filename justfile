@@ -26,3 +26,6 @@ forbid:
 
 test:
   cargo test
+
+test-on-vagrant:
+  vagrant up --provider=qemu
