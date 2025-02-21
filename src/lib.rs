@@ -17,6 +17,9 @@ use {
   variable::Variable,
 };
 
+#[macro_use]
+mod ensure;
+
 mod config;
 mod environment;
 mod error;
