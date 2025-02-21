@@ -1,7 +1,4 @@
 use {
-  config::Config,
-  environment::Environment,
-  error::Error,
   execution_context::ExecutionContext,
   execution_result::ExecutionResult,
   mount::Mount,
@@ -14,7 +11,6 @@ use {
     path::{Path, PathBuf},
   },
   system::{MaterialSystem, System},
-  thiserror::Error,
   variable::Variable,
 };
 
@@ -33,4 +29,9 @@ mod variable;
 
 type Result<T = (), E = Error> = std::result::Result<T, E>;
 
-pub use sandbox::Sandbox;
+pub use {
+  config::{CgroupConfig, CgroupRoot, Config},
+  environment::Environment,
+  error::Error,
+  sandbox::Sandbox,
+};

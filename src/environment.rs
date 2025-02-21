@@ -2,13 +2,15 @@ use super::*;
 
 #[derive(Debug)]
 pub struct Environment {
-  /// First GID to use for sandboxes.
+  /// First gid to use for sandboxes.
   pub first_sandbox_gid: u32,
 
-  /// First UID to use for sandboxes.
+  /// First uid to use for sandboxes.
   pub first_sandbox_uid: u32,
 
   /// Directory where lock files are created.
+  ///
+  /// This directory is created and verified upon Sandbox initialization.
   pub lock_root: PathBuf,
 
   /// Number of sandbox instances supported.
@@ -21,6 +23,8 @@ pub struct Environment {
   ///
   /// To avoid symlink attacks, this directory and all its ancestors
   /// must be writeable only to root.
+  ///
+  /// This directory is created and verified upon Sandbox initialization.
   pub sandbox_root: PathBuf,
 }
 

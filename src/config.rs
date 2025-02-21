@@ -2,13 +2,13 @@ use super::*;
 
 #[derive(Debug, PartialEq)]
 pub enum CgroupRoot {
-  Auto(PathBuf),
-  Fixed(PathBuf),
+  Automatic(PathBuf),
+  Manual(PathBuf),
 }
 
 impl Default for CgroupRoot {
   fn default() -> Self {
-    Self::Auto(PathBuf::from("/run/isolate/cgroup"))
+    Self::Automatic(PathBuf::from("/run/isolate/cgroup"))
   }
 }
 
@@ -16,19 +16,19 @@ impl From<PathBuf> for CgroupRoot {
   fn from(path: PathBuf) -> Self {
     if let Some(file_name) = path.to_str() {
       if let Some(stripped) = file_name.strip_prefix("auto:") {
-        return Self::Auto(PathBuf::from(stripped));
+        return Self::Automatic(PathBuf::from(stripped));
       }
     }
 
-    Self::Fixed(path)
+    Self::Manual(path)
   }
 }
 
 impl From<CgroupRoot> for PathBuf {
   fn from(root: CgroupRoot) -> Self {
     match root {
-      CgroupRoot::Auto(path) => PathBuf::from(format!("auto:{}", path.display())),
-      CgroupRoot::Fixed(path) => path,
+      CgroupRoot::Automatic(path) => PathBuf::from(format!("auto:{}", path.display())),
+      CgroupRoot::Manual(path) => path,
     }
   }
 }
@@ -75,7 +75,7 @@ impl Default for CgroupConfig {
 
 #[derive(Debug, PartialEq)]
 pub struct Config {
-  /// Act on behalf of the specified group ID (only if Isolate was invoked by
+  /// Act on behalf of the specified group id (only if Isolate was invoked by
   /// root).
   ///
   /// This is used in scenarios where a root-controlled process
@@ -83,7 +83,7 @@ pub struct Config {
   /// with the `restrict_initialization` option in the environment configuration.
   pub as_gid: Option<u32>,
 
-  /// Act on behalf of the specified user ID (only if Isolate was invoked by
+  /// Act on behalf of the specified user id (only if Isolate was invoked by
   /// root).
   ///
   /// This is used in scenarios where a root-controlled process
@@ -119,77 +119,11 @@ pub struct Config {
   /// EDQUOT.
   pub inode_quota: Option<u32>,
 
-  /// Inherit all variables from the parent.
-  ///
-  /// UNIX processes normally inherit all environment variables from their
-  /// parent. The sandbox however passes only those variables which are
-  /// explicitly requested by environment rules.
-  pub inherit_env: bool,
-
-  /// By default, isolate closes all file descriptors passed from its parent
-  /// except for descriptors 0, 1, and 2.
-  ///
-  /// This prevents unintentional descriptor leaks. In some cases, passing
-  /// extra descriptors to the sandbox can be desirable, so you can use this
-  /// switch to make them survive.
-  pub inherit_fds: bool,
-
-  /// Do not mount the default set of directories.
-  ///
-  /// Care has to be taken to specify the correct set of
-  /// mounts for the executed program to run correctly.
-  ///
-  /// In particular, +/box+ has to be bound.
-  pub no_default_mounts: bool,
-
   /// When you run multiple sandboxes in parallel,
-  /// you have to assign unique IDs to them by this option.
+  /// you have to assign unique id's to them by this option.
   ///
   /// This defaults to 0.
   pub sandbox_id: Option<u32>,
-
-  /// By default, isolate creates a new network namespace for its child
-  /// process.
-  ///
-  /// This namespace contains no network devices except for a
-  /// per-namespace loopback.
-  ///
-  /// This prevents the program from communicating with the outside world.
-  ///
-  /// If you want to permit communication, you can use this switch to keep the
-  /// child process in the parent's network namespace.
-  pub share_net: bool,
-
-  /// Tell the sandbox manager to keep silence.
-  ///
-  /// No status messages are printed to stderr except for fatal errors of the
-  /// sandbox itself.
-  ///
-  /// The combination of `verbose` and `silent` has an undefined effect.
-  pub silent: bool,
-
-  /// By default, Isolate removes all special files (other than regular files
-  /// and directories) created inside the sandbox.
-  ///
-  /// If you need them, this option disables that behavior, but you need to
-  /// carefully check what you open.
-  pub special_files: bool,
-
-  /// Try to handle interactive programs communicating over a tty.
-  ///
-  /// The sandboxed program will run in a separate process group, which will
-  /// temporarily become the foreground process group of the terminal.
-  ///
-  /// When the program exits, the process group will be switched back to the
-  /// caller.
-  ///
-  /// Please note that the program can do many nasty things including (but not
-  /// limited to) changing terminal settings, changing the line discipline, and
-  /// stuffing characters to the terminal's input queue using the TIOCSTI
-  /// ioctl.
-  ///
-  /// Use with extreme caution.
-  pub tty_hack: bool,
 
   /// Tell the sandbox manager to be verbose and report on what is going on.
   pub verbose: bool,
@@ -211,15 +145,8 @@ impl Default for Config {
       as_uid: None,
       block_quota: None,
       cgroup: None,
-      inherit_env: false,
-      inherit_fds: false,
       inode_quota: None,
-      no_default_mounts: false,
       sandbox_id: Some(0),
-      share_net: false,
-      silent: false,
-      special_files: false,
-      tty_hack: false,
       verbose: false,
       wait: false,
     }
@@ -227,70 +154,23 @@ impl Default for Config {
 }
 
 impl Config {
-  /// Resolves effective user and group IDs for the sandbox.
+  /// Resolves effective user and group id's for the sandbox.
   ///
-  /// Returns either the current process's user/group IDs if as_uid/as_gid are `None`,
+  /// Returns either the current process's user/group id's if as_uid/as_gid are `None`,
   /// or the specified as_uid/as_gid if the process has root privileges.
-  pub fn credentials(&self, system: &impl System) -> Result<(u32, u32)> {
+  pub fn credentials(&self, system: &impl System) -> Result<(Uid, Gid)> {
     let (uid, gid) = (system.getuid().as_raw(), system.getgid().as_raw());
 
     match (self.as_uid, self.as_gid) {
       (Some(_), Some(_)) if uid != 0 => Err(Error::Permission(
         "you must be root to use `as_uid` or `as_gid`".into(),
       )),
-      (Some(as_uid), Some(as_gid)) => Ok((as_uid, as_gid)),
-      (None, None) => Ok((uid, gid)),
+      (Some(as_uid), Some(as_gid)) => Ok((as_uid.into(), as_gid.into())),
+      (None, None) => Ok((uid.into(), gid.into())),
       _ => Err(Error::Config(
         "`as_uid` and `as_gid` must be used either both or none".into(),
       )),
     }
-  }
-
-  /// The sandboxed process gets its own filesystem namespace, which contains only paths
-  /// specified by mount configurations.
-  ///
-  /// By default, all mounts are created read-only and restricted (no devices,
-  /// no setuid binaries). This behavior can be modified using `MountOptions`.
-  ///
-  /// Unless `no_default_dirs` is specified, the default set of mounts includes:
-  /// - `/bin` (read-only)
-  /// - `/dev` (with devices allowed)
-  /// - `/lib` (read-only)
-  /// - `/lib64` (read-only, optional)
-  /// - `/usr` (read-only)
-  /// - `/box` (read-write, bound to working directory)
-  /// - `/proc` (proc filesystem)
-  /// - `/tmp` (temporary directory, read-write)
-  ///
-  /// Mounts are processed in the order they are specified, with default mounts preceding
-  /// user-defined ones. When a mount is replaced, it maintains its original position
-  /// in the sequence.
-  ///
-  /// This ordering is significant when one mount's `inside_path` is a subdirectory of another
-  /// mount's `inside_path`.
-  ///
-  /// For example, mounting "a" followed by "a/b" works as expected, but subdirectory "b" must exist
-  /// in the directory mounted at "a" (the sandbox never creates subdirectories in mounted
-  /// directories for security).
-  ///
-  /// If "a/b" is mounted before "a", the mount at "a/b" becomes inaccessible due to
-  /// being overshadowed by the mount at "a".
-  pub fn default_mounts(&self) -> Result<Vec<Mount>> {
-    Ok(
-      self
-        .no_default_mounts
-        .then_some(vec![
-          Mount::read_write("box", Some("./box"))?,
-          Mount::read_only("bin", None::<&Path>)?,
-          Mount::device("dev", None::<&Path>)?,
-          Mount::read_only("lib", None::<&Path>)?,
-          Mount::optional("lib64", None::<&Path>)?,
-          Mount::filesystem("proc", "proc")?,
-          Mount::temporary("tmp")?,
-          Mount::read_only("usr", None::<&Path>)?,
-        ])
-        .unwrap_or_default(),
-    )
   }
 }
 
@@ -306,19 +186,19 @@ mod tests {
     );
 
     assert_matches!(CgroupRoot::from(auto_path),
-      CgroupRoot::Auto(path) if path == PathBuf::from("/some/path")
+      CgroupRoot::Automatic(path) if path == PathBuf::from("/some/path")
     );
 
     assert_matches!(CgroupRoot::from(fixed_path),
-      CgroupRoot::Fixed(path) if path == PathBuf::from("/some/fixed/path")
+      CgroupRoot::Manual(path) if path == PathBuf::from("/some/fixed/path")
     );
   }
 
   #[test]
   fn pathbuf_from_cgroup_root() {
     let (auto_root, fixed_root) = (
-      CgroupRoot::Auto(PathBuf::from("/some/path")),
-      CgroupRoot::Fixed(PathBuf::from("/some/fixed/path")),
+      CgroupRoot::Automatic(PathBuf::from("/some/path")),
+      CgroupRoot::Manual(PathBuf::from("/some/fixed/path")),
     );
 
     let auto_path: PathBuf = auto_root.into();
@@ -333,7 +213,7 @@ mod tests {
     let config = CgroupConfig::default();
 
     assert_matches!(config.root,
-      CgroupRoot::Auto(path) if path == PathBuf::from("/run/isolate/cgroup")
+      CgroupRoot::Automatic(path) if path == PathBuf::from("/run/isolate/cgroup")
     );
   }
 }

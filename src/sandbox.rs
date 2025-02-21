@@ -2,31 +2,66 @@ use super::*;
 
 #[derive(Debug)]
 #[allow(unused)]
-pub struct Sandbox {
-  /// The directory for the sandbox (cf_box_root/<box_id>).
-  directory: PathBuf,
-  /// The group id for the sandbox (cf_first_gid + box_id).
-  gid: u32,
-  /// The sandbox ID (must be in the range 0..num_boxes).
+pub struct Credentials {
+  /// The group id for the sandbox (`sandbox_first_gid` + `sandbox_id`).
+  gid: Gid,
+  /// The sandbox id (must be in the range [0, num_boxes - 1] inclusive).
   id: u32,
-  /// Whether the sandbox has been initialized.
-  initialized: bool,
-  /// Which directories to mount on sandbox initialization.
-  mounts: Vec<Mount>,
   /// Original group id that invoked the sandbox.
-  original_gid: u32,
+  original_gid: Gid,
   /// Original user id that invoked the sandbox.
-  original_uid: u32,
-  /// The user id for the sandbox (cf_first_uid + box_id).
-  uid: u32,
-  /// Environment variables to set on sandbox initialization.
-  variables: Vec<Variable>,
+  original_uid: Uid,
+  /// The user id for the sandbox (`sandbox_first_uid` + `sandbox`).
+  uid: Uid,
 }
 
-impl TryFrom<(&Config, &Environment)> for Sandbox {
+#[derive(Debug)]
+#[allow(unused)]
+pub struct Sandbox {
+  /// The cgroup configuration for the sandbox.
+  cgroup: Option<CgroupConfig>,
+
+  /// Credentials for the sandbox.
+  credentials: Credentials,
+
+  /// The directory for the sandbox (`sandbox_root` / `sandbox_id`).
+  directory: PathBuf,
+
+  /// Whether the sandbox has been initialized.
+  initialized: bool,
+
+  /// Directory where lock files are created.
+  ///
+  /// This directory is created and verified upon `Sandbox` initialization.
+  lock_root: PathBuf,
+
+  /// All sandboxes are created under this directory.
+  ///
+  /// To avoid symlink attacks, this directory and all its ancestors
+  /// must be writeable only to root.
+  ///
+  /// This directory is (optionally) created and verified upon `Sandbox` initialization.
+  sandbox_root: PathBuf,
+
+  /// Tell the sandbox manager to be verbose and report on what is going on.
+  ///
+  /// This is useful for debugging purposes.
+  verbose: bool,
+
+  /// Multiple instances of Isolate cannot manage the same sandbox
+  /// simultaneously.
+  ///
+  /// If you attempt to do that, the new instance refuses to run.
+  ///
+  /// With this option, the new instance waits for the other instance to
+  /// finish.
+  wait: bool,
+}
+
+impl TryFrom<(Config, &Environment)> for Sandbox {
   type Error = Error;
 
-  fn try_from(value: (&Config, &Environment)) -> Result<Self> {
+  fn try_from(value: (Config, &Environment)) -> Result<Self> {
     let (config, environment) = value;
 
     Self::new(config, environment, &MaterialSystem)
@@ -34,7 +69,7 @@ impl TryFrom<(&Config, &Environment)> for Sandbox {
 }
 
 impl Sandbox {
-  fn new(config: &Config, environment: &Environment, system: &impl System) -> Result<Self> {
+  fn new(config: Config, environment: &Environment, system: &impl System) -> Result<Self> {
     ensure!(system.geteuid().is_root(), Error::NotRoot);
 
     if system.getegid().as_raw() != 0 {
@@ -43,10 +78,10 @@ impl Sandbox {
         .map_err(|e| Error::Permission(format!("cannot switch to root group: {}", e)))?;
     }
 
-    let box_id = config.sandbox_id.unwrap_or(0);
+    let id = config.sandbox_id.unwrap_or(0);
 
     ensure!(
-      box_id < environment.num_sandboxes,
+      id < environment.num_sandboxes,
       Error::Config(format!(
         "sandbox id out of range (allowed: 0-{})",
         environment.num_sandboxes - 1
@@ -60,28 +95,21 @@ impl Sandbox {
     system.umask(Mode::from_bits_truncate(0o022));
 
     Ok(Self {
-      directory: environment.sandbox_root.join(box_id.to_string()),
-      gid: environment.first_sandbox_gid + box_id,
-      id: box_id,
+      cgroup: config.cgroup,
+      credentials: Credentials {
+        gid: (environment.first_sandbox_gid + id).into(),
+        id,
+        original_gid,
+        original_uid,
+        uid: (environment.first_sandbox_uid + id).into(),
+      },
+      directory: environment.sandbox_root.join(id.to_string()),
       initialized: false,
-      mounts: config.default_mounts()?,
-      original_gid,
-      original_uid,
-      uid: environment.first_sandbox_uid + box_id,
-      variables: Vec::new(),
+      lock_root: environment.lock_root.clone(),
+      sandbox_root: environment.sandbox_root.clone(),
+      verbose: config.verbose,
+      wait: config.wait,
     })
-  }
-
-  /// Add a mount to the sandbox.
-  pub fn add_mount(&mut self, mount: Mount) -> Result {
-    self.mounts.push(mount);
-    Ok(())
-  }
-
-  /// Add a variable to the sandbox.
-  pub fn add_variable(&mut self, variable: Variable) -> Result {
-    self.variables.push(variable);
-    Ok(())
   }
 
   /// Initialize the sandbox.
@@ -92,7 +120,7 @@ impl Sandbox {
   }
 
   /// Run a command in the sandbox.
-  pub fn run(&self, _ctx: ExecutionContext) -> Result<ExecutionResult> {
+  pub fn execute(&self, _ctx: ExecutionContext) -> Result<ExecutionResult> {
     ensure!(self.initialized, Error::NotInitialized);
 
     todo!("Run a specified command in the sandbox");
@@ -124,9 +152,9 @@ mod tests {
     egid: Gid,
     euid: Uid,
     gid: Gid,
-    last_umask: RefCell<Option<Mode>>,
     setegid_errno: Option<Errno>,
     uid: Uid,
+    umask: RefCell<Option<Mode>>,
   }
 
   impl System for MockSystem {
@@ -155,33 +183,9 @@ mod tests {
     }
 
     fn umask(&self, mask: Mode) -> Mode {
-      *self.last_umask.borrow_mut() = Some(mask);
+      *self.umask.borrow_mut() = Some(mask);
       Mode::from_bits_truncate(0)
     }
-  }
-
-  #[test]
-  fn sandbox_config_defaults() {
-    assert_eq!(
-      Config::default(),
-      Config {
-        as_gid: None,
-        as_uid: None,
-        block_quota: None,
-        cgroup: None,
-        inherit_env: false,
-        inherit_fds: false,
-        inode_quota: None,
-        no_default_mounts: false,
-        sandbox_id: Some(0),
-        share_net: false,
-        silent: false,
-        special_files: false,
-        tty_hack: false,
-        verbose: false,
-        wait: false
-      }
-    );
   }
 
   #[test]
@@ -189,15 +193,15 @@ mod tests {
     let config = Config::default();
 
     let mock = MockSystem {
-      euid: Uid::from_raw(1000), // The `euid` here is not root.
       egid: Gid::from_raw(0),
-      uid: Uid::from_raw(1000),
+      euid: Uid::from_raw(1000), // The `euid` here is not root.
       gid: Gid::from_raw(0),
       setegid_errno: None,
-      last_umask: RefCell::new(None),
+      uid: Uid::from_raw(1000),
+      umask: RefCell::new(None),
     };
 
-    let result = Sandbox::new(&config, &Environment::default(), &mock);
+    let result = Sandbox::new(config, &Environment::default(), &mock);
 
     assert!(matches!(result, Err(Error::NotRoot)));
   }
@@ -207,15 +211,15 @@ mod tests {
     let config = Config::default();
 
     let mock = MockSystem {
-      euid: Uid::from_raw(0),
       egid: Gid::from_raw(1000), // The `egid` here is not root.
-      uid: Uid::from_raw(0),
+      euid: Uid::from_raw(0),
       gid: Gid::from_raw(1000),
       setegid_errno: Some(Errno::EPERM), // Used to simulate EPERM failure.
-      last_umask: RefCell::new(None),
+      uid: Uid::from_raw(0),
+      umask: RefCell::new(None),
     };
 
-    let result = Sandbox::new(&config, &Environment::default(), &mock);
+    let result = Sandbox::new(config, &Environment::default(), &mock);
 
     assert_matches!(
       result,
@@ -228,15 +232,15 @@ mod tests {
     let config = Config::default();
 
     let mock = MockSystem {
-      euid: Uid::from_raw(0),
       egid: Gid::from_raw(1000), // The `egid` here is not root.
-      uid: Uid::from_raw(0),
+      euid: Uid::from_raw(0),
       gid: Gid::from_raw(1000),
       setegid_errno: Some(Errno::EINVAL), // Used to simulate EINVAL failure.
-      last_umask: RefCell::new(None),
+      uid: Uid::from_raw(0),
+      umask: RefCell::new(None),
     };
 
-    let result = Sandbox::new(&config, &Environment::default(), &mock);
+    let result = Sandbox::new(config, &Environment::default(), &mock);
 
     assert_matches!(
       result,
@@ -253,15 +257,15 @@ mod tests {
     };
 
     let mock = MockSystem {
-      euid: Uid::from_raw(0),
       egid: Gid::from_raw(0),
-      uid: Uid::from_raw(1000), // The `uid` here is not root.
+      euid: Uid::from_raw(0),
       gid: Gid::from_raw(1000),
       setegid_errno: None,
-      last_umask: RefCell::new(None),
+      uid: Uid::from_raw(1000), // The `uid` here is not root.
+      umask: RefCell::new(None),
     };
 
-    let result = Sandbox::new(&config, &Environment::default(), &mock);
+    let result = Sandbox::new(config, &Environment::default(), &mock);
 
     assert_matches!(
       result,
@@ -280,12 +284,12 @@ mod tests {
       egid: Gid::from_raw(0),
       euid: Uid::from_raw(0),
       gid: Gid::from_raw(0),
-      last_umask: RefCell::new(None),
       setegid_errno: None,
       uid: Uid::from_raw(0),
+      umask: RefCell::new(None),
     };
 
-    let result = Sandbox::new(&config, &Environment::default(), &mock);
+    let result = Sandbox::new(config, &Environment::default(), &mock);
 
     assert_matches!(
       result,
@@ -301,20 +305,20 @@ mod tests {
       egid: Gid::from_raw(0),
       euid: Uid::from_raw(0),
       gid: Gid::from_raw(0),
-      last_umask: RefCell::new(None),
       setegid_errno: None,
       uid: Uid::from_raw(0),
+      umask: RefCell::new(None),
     };
 
-    let sandbox = Sandbox::new(&config, &Environment::default(), &mock)
+    let sandbox = Sandbox::new(config, &Environment::default(), &mock)
       .expect("Sandbox creation should succeed");
 
     // With no as_uid/as_gid, the sandbox takes the original uid/gid from the system.
-    assert_eq!(sandbox.original_gid, 0);
-    assert_eq!(sandbox.original_uid, 0);
+    assert_eq!(sandbox.credentials.original_gid, 0.into());
+    assert_eq!(sandbox.credentials.original_uid, 0.into());
 
     assert_eq!(
-      mock.last_umask.borrow().unwrap(),
+      mock.umask.borrow().unwrap(),
       Mode::from_bits_truncate(0o022)
     );
   }
@@ -331,18 +335,18 @@ mod tests {
       egid: Gid::from_raw(0),
       euid: Uid::from_raw(0),
       gid: Gid::from_raw(0),
-      last_umask: RefCell::new(None),
       setegid_errno: None,
       // In this scenario, the real uid/gid is root so using as_uid/as_gid is allowed.
       uid: Uid::from_raw(0),
+      umask: RefCell::new(None),
     };
 
-    let sandbox = Sandbox::new(&config, &Environment::default(), &mock)
+    let sandbox = Sandbox::new(config, &Environment::default(), &mock)
       .expect("Sandbox creation should succeed");
 
-    // When as_uid/as_gid are provided and allowed, the sandbox's IDs are set to those values.
-    assert_eq!(sandbox.original_uid, 2000);
-    assert_eq!(sandbox.original_gid, 2000);
+    // When as_uid/as_gid are provided and allowed, the sandbox's id are set to those values.
+    assert_eq!(sandbox.credentials.original_uid, 2000.into());
+    assert_eq!(sandbox.credentials.original_gid, 2000.into());
   }
 
   #[test]
@@ -364,22 +368,22 @@ mod tests {
       egid: Gid::from_raw(0),
       euid: Uid::from_raw(0),
       gid: Gid::from_raw(0),
-      last_umask: RefCell::new(None),
       setegid_errno: None,
       uid: Uid::from_raw(0),
+      umask: RefCell::new(None),
     };
 
     let sandbox =
-      Sandbox::new(&config, &environment, &mock).expect("Sandbox creation should succeed");
+      Sandbox::new(config, &environment, &mock).expect("Sandbox creation should succeed");
 
     assert_eq!(
       sandbox.directory,
       PathBuf::from("/tmp/isolate_test").join("5")
     );
 
-    assert_eq!(sandbox.gid, 20000 + 5);
-    assert_eq!(sandbox.id, 5);
-    assert_eq!(sandbox.uid, 10000 + 5);
+    assert_eq!(sandbox.credentials.gid, (20000 + 5).into());
+    assert_eq!(sandbox.credentials.id, 5);
+    assert_eq!(sandbox.credentials.uid, (10000 + 5).into());
   }
 
   #[test]
@@ -388,7 +392,7 @@ mod tests {
       sandbox_root: PathBuf::from("/tmp/isolate_test"),
       first_sandbox_gid: 20000,
       first_sandbox_uid: 10000,
-      num_sandboxes: 10, // Valid box ID's are between 0 and 9 (inclusive).
+      num_sandboxes: 10, // Valid box id's are between 0 and 9 (inclusive).
       ..Default::default()
     };
 
@@ -401,12 +405,12 @@ mod tests {
       egid: Gid::from_raw(0),
       euid: Uid::from_raw(0),
       gid: Gid::from_raw(0),
-      last_umask: RefCell::new(None),
       setegid_errno: None,
       uid: Uid::from_raw(0),
+      umask: RefCell::new(None),
     };
 
-    let result = Sandbox::new(&config, &environment, &mock);
+    let result = Sandbox::new(config, &environment, &mock);
 
     assert_matches!(
       result,

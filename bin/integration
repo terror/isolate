@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+CLEANING_UP=0
+
+cleanup() {
+  if [ "$CLEANING_UP" -eq 1 ]; then
+    return
+  fi
+
+  CLEANING_UP=1
+
+  echo -e "\nCleaning up..."
+
+  if vagrant status | grep -q "running"; then
+    echo "Destroying Vagrant VM..."
+    vagrant destroy -f
+  else
+    echo "Vagrant VM is not running"
+  fi
+}
+
+handle_interrupt() {
+  echo -e "\nReceived interrupt signal..."
+  cleanup
+  exit 1
+}
+
+trap cleanup EXIT
+trap handle_interrupt SIGINT SIGTERM
+
+retry() {
+  local max_attempts=$1
+  local delay=$2
+  shift 2
+  local attempt=0
+
+  until [ $attempt -gt "$max_attempts" ]; do
+    if "$@"; then
+      return 0
+    fi
+
+    attempt=$((attempt + 1))
+
+    if [ $attempt -le "$max_attempts" ]; then
+      echo "Attempt #$attempt failed. Retrying in $delay seconds..."
+      sleep "$delay"
+    fi
+  done
+
+  echo "Failed after $max_attempts attempts"
+
+  return 1
+}
+
+if ! vagrant status | grep -q "running"; then
+  echo "Starting Vagrant VM..."
+  retry 3 5 vagrant up --provider=qemu
+fi
+
+vagrant ssh -c "cd /vagrant && \
+  sudo RUST_TEST_THREADS=1 \
+  /root/.cargo/bin/cargo test --features integration"

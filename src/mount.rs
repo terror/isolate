@@ -34,7 +34,6 @@ pub struct MountOptions {
 }
 
 #[derive(Debug, Default, PartialEq)]
-#[allow(unused)]
 pub struct Mount {
   /// Path inside the sandbox where the directory will be mounted.
   inside_path: PathBuf,
@@ -74,25 +73,13 @@ impl Mount {
     })
   }
 
-  pub fn read_only(inside: impl AsRef<Path>, outside: Option<impl AsRef<Path>>) -> Result<Self> {
-    Self::new(inside, outside, MountOptions::default())
-  }
-
-  pub fn read_write(inside: impl AsRef<Path>, outside: Option<impl AsRef<Path>>) -> Result<Self> {
+  pub fn device(
+    inside_path: impl AsRef<Path>,
+    outside_path: Option<impl AsRef<Path>>,
+  ) -> Result<Self> {
     Self::new(
-      inside,
-      outside,
-      MountOptions {
-        read_write: true,
-        ..Default::default()
-      },
-    )
-  }
-
-  pub fn device(inside: impl AsRef<Path>, outside: Option<impl AsRef<Path>>) -> Result<Self> {
-    Self::new(
-      inside,
-      outside,
+      inside_path,
+      outside_path,
       MountOptions {
         allow_devices: true,
         ..Default::default()
@@ -100,21 +87,9 @@ impl Mount {
     )
   }
 
-  pub fn temporary(inside: impl AsRef<Path>) -> Result<Self> {
+  pub fn filesystem(inside_path: impl AsRef<Path>, fs_type: impl Into<String>) -> Result<Self> {
     Self::new(
-      inside,
-      None::<&Path>,
-      MountOptions {
-        temporary: true,
-        read_write: true,
-        ..Default::default()
-      },
-    )
-  }
-
-  pub fn filesystem(inside: impl AsRef<Path>, fs_type: impl Into<String>) -> Result<Self> {
-    Self::new(
-      inside,
+      inside_path,
       None::<&Path>,
       MountOptions {
         filesystem: Some(fs_type.into()),
@@ -123,12 +98,48 @@ impl Mount {
     )
   }
 
-  pub fn optional(inside: impl AsRef<Path>, outside: Option<impl AsRef<Path>>) -> Result<Self> {
+  pub fn optional(
+    inside_path: impl AsRef<Path>,
+    outside_path: Option<impl AsRef<Path>>,
+  ) -> Result<Self> {
     Self::new(
-      inside,
-      outside,
+      inside_path,
+      outside_path,
       MountOptions {
         optional: true,
+        ..Default::default()
+      },
+    )
+  }
+
+  pub fn read_only(
+    inside_path: impl AsRef<Path>,
+    outside_path: Option<impl AsRef<Path>>,
+  ) -> Result<Self> {
+    Self::new(inside_path, outside_path, MountOptions::default())
+  }
+
+  pub fn read_write(
+    inside_path: impl AsRef<Path>,
+    outside_path: Option<impl AsRef<Path>>,
+  ) -> Result<Self> {
+    Self::new(
+      inside_path,
+      outside_path,
+      MountOptions {
+        read_write: true,
+        ..Default::default()
+      },
+    )
+  }
+
+  pub fn temporary(inside_path: impl AsRef<Path>) -> Result<Self> {
+    Self::new(
+      inside_path,
+      None::<&Path>,
+      MountOptions {
+        temporary: true,
+        read_write: true,
         ..Default::default()
       },
     )

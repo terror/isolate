@@ -15,6 +15,11 @@ build:
 check:
   cargo clippy --all-targets --all-features
 
+dev-deps:
+  brew install --cask vagrant
+  vagrant plugin install vagrant-qemu
+  brew install qemu
+
 fmt:
   cargo +nightly fmt
 
@@ -24,8 +29,8 @@ fmt-check:
 forbid:
   ./bin/forbid
 
-test:
-  cargo test
+test *args:
+  cargo test {{args}}
 
 test-on-vagrant:
-  vagrant up --provider=qemu
+  ./bin/integration
