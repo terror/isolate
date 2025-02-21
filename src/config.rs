@@ -1,9 +1,9 @@
 use super::*;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum CgroupRoot {
-  Fixed(PathBuf),
   Auto(PathBuf),
+  Fixed(PathBuf),
 }
 
 impl Default for CgroupRoot {
@@ -27,13 +27,13 @@ impl From<PathBuf> for CgroupRoot {
 impl From<CgroupRoot> for PathBuf {
   fn from(root: CgroupRoot) -> Self {
     match root {
-      CgroupRoot::Fixed(path) => path,
       CgroupRoot::Auto(path) => PathBuf::from(format!("auto:{}", path.display())),
+      CgroupRoot::Fixed(path) => path,
     }
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct CgroupConfig {
   /// Defines the CPU cores available for this control group using the cpuset format.
   ///
@@ -66,21 +66,21 @@ impl Default for CgroupConfig {
   fn default() -> Self {
     Self {
       cpu_cores: None,
-      memory_limit: None,
+      memory_limit: Some(1024 * 1024),
       memory_nodes: None,
       root: CgroupRoot::default(),
     }
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Config {
   /// Act on behalf of the specified group ID (only if Isolate was invoked by
   /// root).
   ///
   /// This is used in scenarios where a root-controlled process
   /// manages creation of sandboxes for regular users, usually in conjunction
-  /// with the `restricted_init` option in the configuration file.
+  /// with the `restrict_initialization` option in the environment configuration.
   pub as_gid: Option<u32>,
 
   /// Act on behalf of the specified user ID (only if Isolate was invoked by
@@ -88,13 +88,11 @@ pub struct Config {
   ///
   /// This is used in scenarios where a root-controlled process
   /// manages creation of sandboxes for regular users, usually in conjunction
-  /// with the `restricted_init` option in the configuration file.
+  /// with the `restrict_initialization` option in the environment configuration.
   pub as_uid: Option<u32>,
 
   /// Set disk quota to a given number of blocks. This requires the filesystem
   /// to be mounted with support for quotas.
-  ///
-  /// Unlike other options, this one must be given to *isolate --init*.
   ///
   /// Please note that this currently works only on the ext family of
   /// filesystems (other filesystems use other interfaces for setting
@@ -106,36 +104,6 @@ pub struct Config {
 
   /// Control group configuration.
   pub cgroup: Option<CgroupConfig>,
-
-  /// Limit size of core files created when a process crashes to 'size'
-  /// kilobytes.
-  ///
-  /// Defaults to zero, meaning that no core files are produced inside the
-  /// sandbox.
-  pub core_size_limit: Option<u32>,
-
-  /// When the `time` limit is exceeded, do not kill the program immediately,
-  /// but wait until `extra_time` seconds elapse since the start of the
-  /// program.
-  ///
-  /// This allows to report the real execution time, even if it exceeds the
-  /// limit slightly.
-  ///
-  /// Fractional numbers are allowed.
-  pub extra_time: Option<f64>,
-
-  /// Limit size of each file created (or modified) by the program to 'size'
-  /// kilobytes.
-  ///
-  /// In most cases, it is better to restrict overall disk usage by a disk
-  /// quota (see below).
-  ///
-  /// This option can help in cases when quotas are not enabled
-  /// on the underlying filesystem.
-  ///
-  /// If this limit is reached, system calls expanding files fail with error
-  /// EFBIG and the program receives the SIGXFSZ signal.
-  pub file_size_limit: Option<u32>,
 
   /// Set disk quota to a given number of inodes.
   ///
@@ -166,41 +134,13 @@ pub struct Config {
   /// switch to make them survive.
   pub inherit_fds: bool,
 
-  /// Limit address space of the program to 'size' kilobytes.
+  /// Do not mount the default set of directories.
   ///
-  /// If more processes are allowed, this applies to each of them separately.
-  ///
-  /// If this limit is reached, further memory allocations fail (e.g., malloc
-  /// returns NULL).
-  pub memory_limit: Option<u32>,
-
-  /// Do not bind the default set of directories.
-  ///
-  /// Care has to be taken to specify the correct set of rules (using
-  /// `dir_rules`) for the executed program to run correctly.
+  /// Care has to be taken to specify the correct set of
+  /// mounts for the executed program to run correctly.
   ///
   /// In particular, +/box+ has to be bound.
-  pub no_default_dirs: bool,
-
-  /// Limit number of open files to 'max'. The default value is 64. Setting
-  /// this option to 0 will result in unlimited open files.
-  ///
-  /// If this limit is reached, system calls creating file descriptors fail
-  /// with error EMFILE.
-  pub open_files_limit: Option<u32>,
-
-  /// Permit the program to create up to 'max' processes and/or threads.
-  ///
-  /// Please keep in mind that time and memory limit do not work with multiple
-  /// processes unless you enable the control group mode.
-  ///
-  /// If 'max' is not given, an arbitrary number of processes can be run.
-  ///
-  /// By default, only one process is permitted.
-  ///
-  /// If this limit is exceeded, system calls creating processes fail with
-  /// error EAGAIN.
-  pub process_limit: Option<u32>,
+  pub no_default_mounts: bool,
 
   /// When you run multiple sandboxes in parallel,
   /// you have to assign unique IDs to them by this option.
@@ -235,59 +175,6 @@ pub struct Config {
   /// carefully check what you open.
   pub special_files: bool,
 
-  /// Limit process stack to 'size' kilobytes.
-  ///
-  /// By default, the whole address space is available for the stack, but it is
-  /// subject to the `memory_limit` limit.
-  ///
-  /// If this limit is exceeded, the program receives the SIGSEGV signal.
-  pub stack_limit: Option<u32>,
-
-  /// Redirect standard error output to a file.
-  ///
-  /// The file has to be accessible inside the sandbox (which means that the
-  /// sandboxed program can manipulate it arbitrarily).
-  ///
-  /// If not specified, standard error output is inherited from the parent
-  /// process.
-  ///
-  /// See also `stderr-to-stdout`.
-  pub stderr: Option<PathBuf>,
-
-  /// Redirect standard error output to standard output.
-  ///
-  /// This is performed after the standard output is redirected by `stdout`.
-  ///
-  /// Mutually exclusive with `stderr`.
-  pub stderr_to_stdout: bool,
-
-  /// Redirect standard input from a file.
-  ///
-  /// The file has to be accessible inside the sandbox
-  /// (which means that the sandboxed program can manipulate it arbitrarily).
-  ///
-  /// If not specified, standard input is inherited from the parent process.
-  pub stdin: Option<PathBuf>,
-
-  /// Redirect standard output to a file.
-  ///
-  /// The file has to be accessible inside the sandbox (which means that the
-  /// sandboxed program can manipulate it arbitrarily).
-  ///
-  /// If not specified, standard output is inherited from the parent process
-  /// and the sandbox manager does not write anything to it.
-  pub stdout: Option<PathBuf>,
-
-  /// Limit run time of the program to 'time' seconds.
-  ///
-  /// Fractional numbers are allowed.
-  ///
-  /// Time in which the OS assigns the processor to other tasks is not counted.
-  ///
-  /// If this limit is exceeded, the program is killed (after `extra_time`, if
-  /// set).
-  pub time_limit: Option<f64>,
-
   /// Try to handle interactive programs communicating over a tty.
   ///
   /// The sandboxed program will run in a separate process group, which will
@@ -315,26 +202,6 @@ pub struct Config {
   /// With this option, the new instance waits for the other instance to
   /// finish.
   pub wait: bool,
-
-  /// Limit wall-clock time to 'time' seconds.
-  ///
-  /// Fractional values are allowed.
-  ///
-  /// This clock measures the time from the start of the program to its exit,
-  /// so it does not stop when the program has lost the CPU or when it is
-  /// waiting for an external event.
-  ///
-  /// We recommend to use `time_limit` as the main limit, but set
-  /// `wall_time_limit` to a much higher value as a precaution against
-  /// sleeping programs.
-  ///
-  /// If this limit is exceeded, the program is killed.
-  pub wall_time_limit: Option<f64>,
-
-  /// Change directory to a specified path before executing the program.
-  ///
-  /// This path must be relative to the root of the sandbox.
-  pub working_directory: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -344,36 +211,26 @@ impl Default for Config {
       as_uid: None,
       block_quota: None,
       cgroup: None,
-      core_size_limit: Some(0),
-      extra_time: Some(0.5),
-      file_size_limit: Some(8192),
       inherit_env: false,
       inherit_fds: false,
       inode_quota: None,
-      memory_limit: Some(256_000),
-      no_default_dirs: false,
-      open_files_limit: Some(64),
-      process_limit: Some(1),
+      no_default_mounts: false,
       sandbox_id: Some(0),
       share_net: false,
       silent: false,
       special_files: false,
-      stack_limit: Some(32_000),
-      stderr: None,
-      stderr_to_stdout: false,
-      stdin: None,
-      stdout: None,
-      time_limit: Some(1.0),
       tty_hack: false,
       verbose: false,
       wait: false,
-      wall_time_limit: Some(5.0),
-      working_directory: None,
     }
   }
 }
 
 impl Config {
+  /// Resolves effective user and group IDs for the sandbox.
+  ///
+  /// Returns either the current process's user/group IDs if as_uid/as_gid are `None`,
+  /// or the specified as_uid/as_gid if the process has root privileges.
   pub fn credentials(&self, system: &impl System) -> Result<(u32, u32)> {
     let (uid, gid) = (system.getuid().as_raw(), system.getgid().as_raw());
 
@@ -421,7 +278,7 @@ impl Config {
   pub fn default_mounts(&self) -> Result<Vec<Mount>> {
     Ok(
       self
-        .no_default_dirs
+        .no_default_mounts
         .then_some(vec![
           Mount::read_write("box", Some("./box"))?,
           Mount::read_only("bin", None::<&Path>)?,

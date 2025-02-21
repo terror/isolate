@@ -92,7 +92,7 @@ impl Sandbox {
   }
 
   /// Run a command in the sandbox.
-  pub fn run(&self, _command: &str, _args: &[&str]) -> Result<ExecutionResult> {
+  pub fn run(&self, _ctx: ExecutionContext) -> Result<ExecutionResult> {
     ensure!(self.initialized, Error::NotInitialized);
 
     todo!("Run a specified command in the sandbox");
@@ -162,10 +162,26 @@ mod tests {
 
   #[test]
   fn sandbox_config_defaults() {
-    let config = Config::default();
-
-    assert_eq!(config.sandbox_id, Some(0));
-    assert_eq!(config.open_files_limit, Some(64));
+    assert_eq!(
+      Config::default(),
+      Config {
+        as_gid: None,
+        as_uid: None,
+        block_quota: None,
+        cgroup: None,
+        inherit_env: false,
+        inherit_fds: false,
+        inode_quota: None,
+        no_default_mounts: false,
+        sandbox_id: Some(0),
+        share_net: false,
+        silent: false,
+        special_files: false,
+        tty_hack: false,
+        verbose: false,
+        wait: false
+      }
+    );
   }
 
   #[test]

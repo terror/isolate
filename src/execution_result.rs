@@ -54,7 +54,7 @@ pub struct ExecutionResult {
   pub context_switches_voluntary: u32,
 
   /// CPU time used by the process in seconds.
-  pub cpu_time_sec: f64,
+  pub cpu_time_ms: f64,
 
   /// Process exit code (if terminated normally).
   pub exit_code: i32,
@@ -86,5 +86,27 @@ pub struct ExecutionResult {
   pub termination_signal: i32,
 
   /// Total wall clock time in seconds.
-  pub wall_time_sec: f64,
+  pub wall_time_ms: f64,
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn status_display() {
+    assert_eq!(Status::RuntimeError.to_string(), "RE");
+    assert_eq!(Status::SignalError.to_string(), "SG");
+    assert_eq!(Status::Timeout.to_string(), "TO");
+    assert_eq!(Status::InternalError.to_string(), "XX");
+  }
+
+  #[test]
+  fn status_from_str() {
+    assert!(matches!(Status::from("RE"), Status::RuntimeError));
+    assert!(matches!(Status::from("SG"), Status::SignalError));
+    assert!(matches!(Status::from("TO"), Status::Timeout));
+    assert!(matches!(Status::from("XX"), Status::InternalError));
+    assert!(matches!(Status::from("invalid"), Status::RuntimeError));
+  }
 }

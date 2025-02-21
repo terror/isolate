@@ -2,6 +2,7 @@ use {
   config::Config,
   environment::Environment,
   error::Error,
+  execution_context::ExecutionContext,
   execution_result::ExecutionResult,
   mount::Mount,
   nix::{
@@ -23,6 +24,7 @@ mod ensure;
 mod config;
 mod environment;
 mod error;
+mod execution_context;
 mod execution_result;
 mod mount;
 mod sandbox;
