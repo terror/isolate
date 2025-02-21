@@ -1,6 +1,39 @@
 use super::*;
 
 #[derive(Debug)]
+pub enum CgroupRoot {
+  Fixed(PathBuf),
+  Auto(PathBuf),
+}
+
+impl Default for CgroupRoot {
+  fn default() -> Self {
+    Self::Auto(PathBuf::from("/run/isolate/cgroup"))
+  }
+}
+
+impl From<PathBuf> for CgroupRoot {
+  fn from(path: PathBuf) -> Self {
+    if let Some(file_name) = path.to_str() {
+      if let Some(stripped) = file_name.strip_prefix("auto:") {
+        return Self::Auto(PathBuf::from(stripped));
+      }
+    }
+
+    Self::Fixed(path)
+  }
+}
+
+impl From<CgroupRoot> for PathBuf {
+  fn from(root: CgroupRoot) -> Self {
+    match root {
+      CgroupRoot::Fixed(path) => path,
+      CgroupRoot::Auto(path) => PathBuf::from(format!("auto:{}", path.display())),
+    }
+  }
+}
+
+#[derive(Debug)]
 pub struct CgroupConfig {
   /// Defines the CPU cores available for this control group using the cpuset format.
   ///
@@ -26,7 +59,7 @@ pub struct CgroupConfig {
   /// This can be either:
   /// - A fixed path in the cgroup filesystem, or
   /// - A dynamic path specified as `"auto:file"`, where the actual path is read from `file`
-  pub root: PathBuf,
+  pub root: CgroupRoot,
 }
 
 impl Default for CgroupConfig {
@@ -35,7 +68,7 @@ impl Default for CgroupConfig {
       cpu_cores: None,
       memory_limit: None,
       memory_nodes: None,
-      root: PathBuf::from("auto:/run/isolate/cgroup"),
+      root: CgroupRoot::default(),
     }
   }
 }
@@ -401,5 +434,49 @@ impl Config {
         ])
         .unwrap_or_default(),
     )
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use {super::*, assert_matches::assert_matches};
+
+  #[test]
+  fn cgroup_root_from_pathbuf() {
+    let (auto_path, fixed_path) = (
+      PathBuf::from("auto:/some/path"),
+      PathBuf::from("/some/fixed/path"),
+    );
+
+    assert_matches!(CgroupRoot::from(auto_path),
+      CgroupRoot::Auto(path) if path == PathBuf::from("/some/path")
+    );
+
+    assert_matches!(CgroupRoot::from(fixed_path),
+      CgroupRoot::Fixed(path) if path == PathBuf::from("/some/fixed/path")
+    );
+  }
+
+  #[test]
+  fn pathbuf_from_cgroup_root() {
+    let (auto_root, fixed_root) = (
+      CgroupRoot::Auto(PathBuf::from("/some/path")),
+      CgroupRoot::Fixed(PathBuf::from("/some/fixed/path")),
+    );
+
+    let auto_path: PathBuf = auto_root.into();
+    let fixed_path: PathBuf = fixed_root.into();
+
+    assert_eq!(auto_path, PathBuf::from("auto:/some/path"));
+    assert_eq!(fixed_path, PathBuf::from("/some/fixed/path"));
+  }
+
+  #[test]
+  fn default_cgroup_config() {
+    let config = CgroupConfig::default();
+
+    assert_matches!(config.root,
+      CgroupRoot::Auto(path) if path == PathBuf::from("/run/isolate/cgroup")
+    );
   }
 }
