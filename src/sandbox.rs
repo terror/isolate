@@ -88,6 +88,15 @@ impl Sandbox {
       ))
     );
 
+    let original_uid = system.getuid();
+
+    if environment.restrict_initialization {
+      ensure!(
+        original_uid.is_root(),
+        Error::Permission("you must be root to initialize the sandbox".into())
+      );
+    }
+
     let (original_uid, original_gid) = config.credentials(system)?;
 
     // The umask is set to 0o022 to ensure that files created by the sandboxed process are
@@ -104,19 +113,12 @@ impl Sandbox {
         uid: (environment.first_sandbox_uid + id).into(),
       },
       directory: environment.sandbox_root.join(id.to_string()),
-      initialized: false,
+      initialized: true,
       lock_root: environment.lock_root.clone(),
       sandbox_root: environment.sandbox_root.clone(),
       verbose: config.verbose,
       wait: config.wait,
     })
-  }
-
-  /// Initialize the sandbox.
-  pub fn initialize(&mut self) -> Result {
-    ensure!(!self.initialized, Error::AlreadyInitialized);
-
-    todo!("Initialize the sandbox");
   }
 
   /// Run a command in the sandbox.
@@ -415,6 +417,36 @@ mod tests {
     assert_matches!(
       result,
       Err(Error::Config(message)) if message.contains("sandbox id out of range")
+    );
+  }
+
+  #[test]
+  fn environment_restricts_sandbox_initialization() {
+    let environment = Environment {
+      num_sandboxes: 10,
+      restrict_initialization: true,
+      ..Default::default()
+    };
+
+    let config = Config {
+      sandbox_id: Some(0),
+      ..Default::default()
+    };
+
+    let mock = MockSystem {
+      egid: Gid::from_raw(0),
+      euid: Uid::from_raw(0),
+      gid: Gid::from_raw(0),
+      setegid_errno: None,
+      uid: Uid::from_raw(1000),
+      umask: RefCell::new(None),
+    };
+
+    let result = Sandbox::new(config, &environment, &mock);
+
+    assert_matches!(
+      result,
+      Err(Error::Permission(message)) if message.contains("you must be root to initialize the sandbox")
     );
   }
 }

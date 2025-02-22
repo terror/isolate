@@ -60,5 +60,4 @@ if ! vagrant status | grep -q "running"; then
 fi
 
 vagrant ssh -c "cd /vagrant && \
-  sudo RUST_TEST_THREADS=1 \
-  /root/.cargo/bin/cargo test --features integration"
+  sudo /root/.cargo/bin/cargo test --features integration -- --test-threads=1"
