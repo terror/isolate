@@ -3,12 +3,12 @@
 use {
   assert_matches::assert_matches,
   isolate::{Config, Environment, Error, Sandbox},
-  nix::unistd::{seteuid, Uid},
+  nix::unistd::{geteuid, seteuid, Uid},
 };
 
 #[test]
 fn sandbox_initialization_as_non_root() {
-  let original_euid = Uid::current();
+  let original_euid = geteuid();
 
   seteuid(Uid::from_raw(1000)).unwrap();
 
@@ -27,6 +27,8 @@ fn sandbox_initialization_as_non_root() {
   assert_matches!(result, Err(Error::NotRoot));
 
   seteuid(original_euid).unwrap();
+
+  assert_eq!(geteuid(), original_euid);
 }
 
 #[test]
