@@ -34,7 +34,7 @@ fn sandbox_construction_as_non_root() {
 }
 
 #[test]
-fn sandbox_id_out_of_range() {
+fn sandbox_construction_id_out_of_range() {
   let environment = Environment {
     num_sandboxes: 10,
     ..Default::default()
@@ -85,7 +85,7 @@ fn sandbox_initialization_creates_sandbox_directories() {
     ..Default::default()
   };
 
-  let sandbox = Sandbox::try_from((config, &environment)).expect("Sandbox creation should succeed");
+  let sandbox = Sandbox::try_from((config, &environment)).unwrap();
 
   sandbox.initialize().unwrap();
 
@@ -130,12 +130,10 @@ fn sandbox_initialization_fails_on_bad_ancestor_permissions() {
     ..Default::default()
   };
 
-  let sandbox = Sandbox::try_from((config, &environment)).expect("Sandbox creation should succeed");
-
-  let result = sandbox.initialize();
+  let sandbox = Sandbox::try_from((config, &environment)).unwrap();
 
   assert!(matches!(
-    result,
+    sandbox.initialize(),
     Err(Error::Permission(msg)) if msg.contains("must be writable only by root")
   ));
 }

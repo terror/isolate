@@ -6,7 +6,6 @@ use {
     sys::stat::{umask, Mode},
     unistd::{chown, getegid, geteuid, getgid, getuid, setegid, Gid, Uid},
   },
-  path_ext::PathExt,
   std::{
     fmt::{self, Display, Formatter},
     fs,
@@ -26,7 +25,6 @@ mod error;
 mod execution_context;
 mod execution_result;
 mod mount;
-mod path_ext;
 mod sandbox;
 mod system;
 mod variable;

@@ -59,6 +59,8 @@ pub struct CgroupConfig {
   /// This can be either:
   /// - A fixed path in the cgroup filesystem, or
   /// - A dynamic path specified as `"auto:file"`, where the actual path is read from `file`
+  ///
+  /// The default value is `"auto:/run/isolate/cgroup"`.
   pub root: CgroupRoot,
 }
 

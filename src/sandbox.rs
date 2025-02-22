@@ -85,7 +85,9 @@ impl<'a> Sandbox<'a> {
     }
 
     if !self.environment.sandbox_root.exists() {
-      self.environment.sandbox_root.create(0o700)?;
+      self
+        .system
+        .create_directory(&self.environment.sandbox_root, 0o700)?;
     }
 
     for ancestor in self.environment.sandbox_root.ancestors() {
@@ -105,15 +107,15 @@ impl<'a> Sandbox<'a> {
       );
     }
 
-    self.directory().recreate(0o700)?;
+    self.system.recreate_directory(&self.directory(), 0o700)?;
 
     let sandbox = self.directory().join("box");
 
-    sandbox.create(0o700)?;
+    self.system.create_directory(&sandbox, 0o700)?;
 
     self
       .system
-      .chown(sandbox, Some(self.original_uid), Some(self.original_gid))
+      .chown(&sandbox, Some(self.original_uid), Some(self.original_gid))
       .map_err(|error| Error::Permission(format!("cannot chown sandbox path: {error}")))?;
 
     Ok(())
@@ -194,17 +196,16 @@ mod tests {
   }
 
   impl System for MockSystem {
-    fn chown(
-      &self,
-      _path: PathBuf,
-      _uid: Option<Uid>,
-      _gid: Option<Gid>,
-    ) -> Result<(), nix::Error> {
+    fn chown(&self, _path: &Path, _uid: Option<Uid>, _gid: Option<Gid>) -> Result<(), nix::Error> {
       if let Some(errno) = self.chown_errno {
         Err(errno)
       } else {
         Ok(())
       }
+    }
+
+    fn create_directory(&self, _path: &Path, _mode: u32) -> Result {
+      Ok(())
     }
 
     fn getegid(&self) -> Gid {
@@ -221,6 +222,10 @@ mod tests {
 
     fn getuid(&self) -> Uid {
       self.uid
+    }
+
+    fn recreate_directory(&self, _path: &Path, _mode: u32) -> Result {
+      Ok(())
     }
 
     fn setegid(&self, _gid: u32) -> Result<(), nix::Error> {
