@@ -15,6 +15,8 @@ pub struct Sandbox<'a> {
   original_gid: Gid,
   /// Original user id that invoked the sandbox.
   original_uid: Uid,
+  /// The system to interact with.
+  system: &'a dyn System,
 }
 
 impl<'a> TryFrom<(Config, &'a Environment)> for Sandbox<'a> {
@@ -28,7 +30,7 @@ impl<'a> TryFrom<(Config, &'a Environment)> for Sandbox<'a> {
 }
 
 impl<'a> Sandbox<'a> {
-  fn new(config: Config, environment: &'a Environment, system: &impl System) -> Result<Self> {
+  fn new(config: Config, environment: &'a Environment, system: &'a dyn System) -> Result<Self> {
     ensure!(system.geteuid().is_root(), Error::NotRoot);
 
     if system.getegid().as_raw() != 0 {
@@ -36,8 +38,6 @@ impl<'a> Sandbox<'a> {
         .setegid(0)
         .map_err(|e| Error::Permission(format!("cannot switch to root group: {}", e)))?;
     }
-
-    let invoked_by_root = system.getuid().is_root();
 
     ensure!(
       config.sandbox_id.unwrap_or(0) < environment.num_sandboxes,
@@ -47,19 +47,29 @@ impl<'a> Sandbox<'a> {
       ))
     );
 
-    let (original_uid, original_gid) = config.credentials(system)?;
+    let (uid, gid) = (system.getuid(), system.getgid());
 
-    // The umask is set to 0o022 to ensure that files created by the sandboxed process are
-    // readable and writable by the user and group, but only readable by others.
+    let (original_uid, original_gid) = match (config.as_uid, config.as_gid) {
+      (Some(_), Some(_)) if !uid.is_root() => Err(Error::Permission(
+        "you must be root to use `as_uid` or `as_gid`".into(),
+      )),
+      (Some(as_uid), Some(as_gid)) => Ok((as_uid.into(), as_gid.into())),
+      (None, None) => Ok((uid, gid)),
+      _ => Err(Error::Config(
+        "`as_uid` and `as_gid` must be used either both or none".into(),
+      )),
+    }?;
+
     system.umask(Mode::from_bits_truncate(0o022));
 
     Ok(Self {
       config,
       environment,
       initialized: false,
-      invoked_by_root,
+      invoked_by_root: uid.is_root(),
       original_gid,
       original_uid,
+      system,
     })
   }
 
@@ -73,6 +83,38 @@ impl<'a> Sandbox<'a> {
         Error::Permission("you must be root to initialize the sandbox".into())
       );
     }
+
+    if !self.environment.sandbox_root.exists() {
+      self.environment.sandbox_root.create(0o700)?;
+    }
+
+    for ancestor in self.environment.sandbox_root.ancestors() {
+      let metadata = fs::metadata(ancestor)?;
+
+      ensure!(
+        metadata.permissions().mode() & 0o022 == 0,
+        Error::Permission(format!(
+          "directory {} must be writable only by root",
+          ancestor.display()
+        ))
+      );
+
+      ensure!(
+        metadata.is_dir(),
+        Error::Permission(format!("{} must be a directory", ancestor.display()))
+      );
+    }
+
+    self.directory().recreate(0o700)?;
+
+    let sandbox = self.directory().join("box");
+
+    sandbox.create(0o700)?;
+
+    self
+      .system
+      .chown(sandbox, Some(self.original_uid), Some(self.original_gid))
+      .map_err(|error| Error::Permission(format!("cannot chown sandbox path: {error}")))?;
 
     Ok(())
   }
@@ -126,7 +168,9 @@ mod tests {
     std::cell::RefCell,
   };
 
+  #[derive(Debug)]
   struct MockSystem {
+    chown_errno: Option<Errno>,
     egid: Gid,
     euid: Uid,
     gid: Gid,
@@ -135,7 +179,34 @@ mod tests {
     umask: RefCell<Option<Mode>>,
   }
 
+  impl Default for MockSystem {
+    fn default() -> Self {
+      Self {
+        chown_errno: None,
+        egid: Gid::from_raw(0),
+        euid: Uid::from_raw(0),
+        gid: Gid::from_raw(0),
+        setegid_errno: None,
+        uid: Uid::from_raw(0),
+        umask: RefCell::new(None),
+      }
+    }
+  }
+
   impl System for MockSystem {
+    fn chown(
+      &self,
+      _path: PathBuf,
+      _uid: Option<Uid>,
+      _gid: Option<Gid>,
+    ) -> Result<(), nix::Error> {
+      if let Some(errno) = self.chown_errno {
+        Err(errno)
+      } else {
+        Ok(())
+      }
+    }
+
     fn getegid(&self) -> Gid {
       self.egid
     }
@@ -167,19 +238,15 @@ mod tests {
   }
 
   #[test]
-  fn new_sandbox_without_root_euid() {
+  fn sandbox_construction_without_root_euid() {
+    let environment = Environment::default();
+
     let config = Config::default();
 
     let mock = MockSystem {
-      egid: Gid::from_raw(0),
-      euid: Uid::from_raw(1000), // The `euid` here is not root.
-      gid: Gid::from_raw(0),
-      setegid_errno: None,
-      uid: Uid::from_raw(1000),
-      umask: RefCell::new(None),
+      euid: Uid::from_raw(1000),
+      ..Default::default()
     };
-
-    let environment = Environment::default();
 
     let result = Sandbox::new(config, &environment, &mock);
 
@@ -187,19 +254,16 @@ mod tests {
   }
 
   #[test]
-  fn new_sandbox_setegid_fails_with_eperm() {
+  fn sandbox_construction_setegid_fails_with_eperm() {
+    let environment = Environment::default();
+
     let config = Config::default();
 
     let mock = MockSystem {
-      egid: Gid::from_raw(1000), // The `egid` here is not root.
-      euid: Uid::from_raw(0),
-      gid: Gid::from_raw(1000),
-      setegid_errno: Some(Errno::EPERM), // Used to simulate EPERM failure.
-      uid: Uid::from_raw(0),
-      umask: RefCell::new(None),
+      egid: Gid::from_raw(1000),
+      setegid_errno: Some(Errno::EPERM),
+      ..Default::default()
     };
-
-    let environment = Environment::default();
 
     let result = Sandbox::new(config, &environment, &mock);
 
@@ -210,19 +274,16 @@ mod tests {
   }
 
   #[test]
-  fn new_sandbox_setegid_fails_with_einval() {
+  fn sandbox_construction_setegid_fails_with_einval() {
+    let environment = Environment::default();
+
     let config = Config::default();
 
     let mock = MockSystem {
-      egid: Gid::from_raw(1000), // The `egid` here is not root.
-      euid: Uid::from_raw(0),
-      gid: Gid::from_raw(1000),
-      setegid_errno: Some(Errno::EINVAL), // Used to simulate EINVAL failure.
-      uid: Uid::from_raw(0),
-      umask: RefCell::new(None),
+      egid: Gid::from_raw(1000),
+      setegid_errno: Some(Errno::EINVAL),
+      ..Default::default()
     };
-
-    let environment = Environment::default();
 
     let result = Sandbox::new(config, &environment, &mock);
 
@@ -233,7 +294,9 @@ mod tests {
   }
 
   #[test]
-  fn new_sandbox_as_uid_as_gid_non_root_original() {
+  fn sandbox_construction_as_uid_as_gid_non_root_original() {
+    let environment = Environment::default();
+
     let config = Config {
       as_uid: Some(2000),
       as_gid: Some(2000),
@@ -241,15 +304,9 @@ mod tests {
     };
 
     let mock = MockSystem {
-      egid: Gid::from_raw(0),
-      euid: Uid::from_raw(0),
-      gid: Gid::from_raw(1000),
-      setegid_errno: None,
-      uid: Uid::from_raw(1000), // The `uid` here is not root.
-      umask: RefCell::new(None),
+      uid: Uid::from_raw(1000),
+      ..Default::default()
     };
-
-    let environment = Environment::default();
 
     let result = Sandbox::new(config, &environment, &mock);
 
@@ -260,22 +317,13 @@ mod tests {
   }
 
   #[test]
-  fn new_sandbox_as_uid_without_as_gid() {
+  fn sandbox_construction_as_uid_without_as_gid() {
+    let (mock, environment) = (MockSystem::default(), Environment::default());
+
     let config = Config {
       as_uid: Some(2000),
       ..Default::default()
     };
-
-    let mock = MockSystem {
-      egid: Gid::from_raw(0),
-      euid: Uid::from_raw(0),
-      gid: Gid::from_raw(0),
-      setegid_errno: None,
-      uid: Uid::from_raw(0),
-      umask: RefCell::new(None),
-    };
-
-    let environment = Environment::default();
 
     let result = Sandbox::new(config, &environment, &mock);
 
@@ -286,19 +334,10 @@ mod tests {
   }
 
   #[test]
-  fn new_sandbox_valid_no_as() {
+  fn sandbox_construction_valid_no_as() {
+    let (mock, environment) = (MockSystem::default(), Environment::default());
+
     let config = Config::default();
-
-    let mock = MockSystem {
-      egid: Gid::from_raw(0),
-      euid: Uid::from_raw(0),
-      gid: Gid::from_raw(0),
-      setegid_errno: None,
-      uid: Uid::from_raw(0),
-      umask: RefCell::new(None),
-    };
-
-    let environment = Environment::default();
 
     let sandbox =
       Sandbox::new(config, &environment, &mock).expect("Sandbox creation should succeed");
@@ -314,24 +353,14 @@ mod tests {
   }
 
   #[test]
-  fn new_sandbox_valid_with_as() {
+  fn sandbox_construction_valid_with_as() {
+    let (mock, environment) = (MockSystem::default(), Environment::default());
+
     let config = Config {
       as_uid: Some(2000),
       as_gid: Some(2000),
       ..Default::default()
     };
-
-    let mock = MockSystem {
-      egid: Gid::from_raw(0),
-      euid: Uid::from_raw(0),
-      gid: Gid::from_raw(0),
-      setegid_errno: None,
-      // In this scenario, the real uid/gid is root so using as_uid/as_gid is allowed.
-      uid: Uid::from_raw(0),
-      umask: RefCell::new(None),
-    };
-
-    let environment = Environment::default();
 
     let sandbox =
       Sandbox::new(config, &environment, &mock).expect("Sandbox creation should succeed");
@@ -342,7 +371,7 @@ mod tests {
   }
 
   #[test]
-  fn new_sandbox_box_dir_setup() {
+  fn sandbox_construction_credentials_setup() {
     let environment = Environment {
       sandbox_root: PathBuf::from("/tmp/isolate_test"),
       first_sandbox_uid: 10000,
@@ -356,14 +385,7 @@ mod tests {
       ..Default::default()
     };
 
-    let mock = MockSystem {
-      egid: Gid::from_raw(0),
-      euid: Uid::from_raw(0),
-      gid: Gid::from_raw(0),
-      setegid_errno: None,
-      uid: Uid::from_raw(0),
-      umask: RefCell::new(None),
-    };
+    let mock = MockSystem::default();
 
     let sandbox =
       Sandbox::new(config, &environment, &mock).expect("Sandbox creation should succeed");
@@ -379,7 +401,7 @@ mod tests {
   }
 
   #[test]
-  fn new_sandbox_box_dir_out_of_range() {
+  fn sandbox_construction_id_out_of_range() {
     let environment = Environment {
       sandbox_root: PathBuf::from("/tmp/isolate_test"),
       first_sandbox_gid: 20000,
@@ -393,14 +415,7 @@ mod tests {
       ..Default::default()
     };
 
-    let mock = MockSystem {
-      egid: Gid::from_raw(0),
-      euid: Uid::from_raw(0),
-      gid: Gid::from_raw(0),
-      setegid_errno: None,
-      uid: Uid::from_raw(0),
-      umask: RefCell::new(None),
-    };
+    let mock = MockSystem::default();
 
     let result = Sandbox::new(config, &environment, &mock);
 
@@ -411,7 +426,7 @@ mod tests {
   }
 
   #[test]
-  fn environment_restricts_sandbox_initialization() {
+  fn sandbox_initialization_restricted_by_environment() {
     let environment = Environment {
       num_sandboxes: 10,
       restrict_initialization: true,
@@ -424,12 +439,8 @@ mod tests {
     };
 
     let mock = MockSystem {
-      egid: Gid::from_raw(0),
-      euid: Uid::from_raw(0),
-      gid: Gid::from_raw(0),
-      setegid_errno: None,
       uid: Uid::from_raw(1000),
-      umask: RefCell::new(None),
+      ..Default::default()
     };
 
     let sandbox = Sandbox::new(config, &environment, &mock).unwrap();

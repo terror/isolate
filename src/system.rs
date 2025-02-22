@@ -1,6 +1,7 @@
 use super::*;
 
-pub trait System {
+pub trait System: std::fmt::Debug {
+  fn chown(&self, path: PathBuf, uid: Option<Uid>, gid: Option<Gid>) -> Result<(), nix::Error>;
   fn getegid(&self) -> Gid;
   fn geteuid(&self) -> Uid;
   fn getgid(&self) -> Gid;
@@ -9,9 +10,14 @@ pub trait System {
   fn umask(&self, mask: Mode) -> Mode;
 }
 
+#[derive(Debug)]
 pub struct MaterialSystem;
 
 impl System for MaterialSystem {
+  fn chown(&self, path: PathBuf, uid: Option<Uid>, gid: Option<Gid>) -> Result<(), nix::Error> {
+    chown(&path, uid, gid)
+  }
+
   fn getegid(&self) -> Gid {
     getegid()
   }

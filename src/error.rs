@@ -8,6 +8,8 @@ pub enum Error {
   BoxIdOutOfRange(u32, u32),
   #[error("configuration error: {0}")]
   Config(String),
+  #[error("io error: {0}")]
+  Io(#[from] std::io::Error),
   #[error("invalid mount: {0}")]
   Mount(String),
   #[error("sandbox has not been initialized")]

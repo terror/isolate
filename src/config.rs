@@ -153,27 +153,6 @@ impl Default for Config {
   }
 }
 
-impl Config {
-  /// Resolves effective user and group id's for the sandbox.
-  ///
-  /// Returns either the current process's user/group id's if as_uid/as_gid are `None`,
-  /// or the specified as_uid/as_gid if the process has root privileges.
-  pub fn credentials(&self, system: &impl System) -> Result<(Uid, Gid)> {
-    let (uid, gid) = (system.getuid(), system.getgid());
-
-    match (self.as_uid, self.as_gid) {
-      (Some(_), Some(_)) if !uid.is_root() => Err(Error::Permission(
-        "you must be root to use `as_uid` or `as_gid`".into(),
-      )),
-      (Some(as_uid), Some(as_gid)) => Ok((as_uid.into(), as_gid.into())),
-      (None, None) => Ok((uid.into(), gid.into())),
-      _ => Err(Error::Config(
-        "`as_uid` and `as_gid` must be used either both or none".into(),
-      )),
-    }
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use {super::*, assert_matches::assert_matches};

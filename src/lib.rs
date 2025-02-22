@@ -4,10 +4,13 @@ use {
   mount::Mount,
   nix::{
     sys::stat::{umask, Mode},
-    unistd::{getegid, geteuid, getgid, getuid, setegid, Gid, Uid},
+    unistd::{chown, getegid, geteuid, getgid, getuid, setegid, Gid, Uid},
   },
+  path_ext::PathExt,
   std::{
     fmt::{self, Display, Formatter},
+    fs,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
   },
   system::{MaterialSystem, System},
@@ -23,6 +26,7 @@ mod error;
 mod execution_context;
 mod execution_result;
 mod mount;
+mod path_ext;
 mod sandbox;
 mod system;
 mod variable;
