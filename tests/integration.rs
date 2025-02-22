@@ -7,7 +7,7 @@ use {
 };
 
 #[test]
-fn sandbox_initialization_as_non_root() {
+fn sandbox_construction_as_non_root() {
   let original_euid = geteuid();
 
   seteuid(Uid::from_raw(1000)).unwrap();

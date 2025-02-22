@@ -2,61 +2,33 @@ use super::*;
 
 #[derive(Debug)]
 #[allow(unused)]
-pub struct Credentials {
-  /// The group id for the sandbox (`sandbox_first_gid` + `sandbox_id`).
-  gid: Gid,
-  /// The sandbox id (must be in the range [0, num_boxes - 1] inclusive).
-  id: u32,
+pub struct Sandbox<'a> {
+  /// The configuration for the sandbox.
+  config: Config,
+  /// The environment configuration.
+  environment: &'a Environment,
+  /// Whether the sandbox has been initialized.
+  initialized: bool,
+  /// Whether the sandbox was invoked by root.
+  invoked_by_root: bool,
   /// Original group id that invoked the sandbox.
   original_gid: Gid,
   /// Original user id that invoked the sandbox.
   original_uid: Uid,
-  /// The user id for the sandbox (`sandbox_first_uid` + `sandbox`).
-  uid: Uid,
 }
 
-#[derive(Debug)]
-#[allow(unused)]
-pub struct Sandbox {
-  /// The cgroup configuration for the sandbox.
-  cgroup: Option<CgroupConfig>,
-
-  /// Credentials for the sandbox.
-  credentials: Credentials,
-
-  /// The directory for the sandbox (`sandbox_root` / `sandbox_id`).
-  directory: PathBuf,
-
-  /// Whether the sandbox has been initialized.
-  initialized: bool,
-
-  /// Tell the sandbox manager to be verbose and report on what is going on.
-  ///
-  /// This is useful for debugging purposes.
-  verbose: bool,
-
-  /// Multiple instances of Isolate cannot manage the same sandbox
-  /// simultaneously.
-  ///
-  /// If you attempt to do that, the new instance refuses to run.
-  ///
-  /// With this option, the new instance waits for the other instance to
-  /// finish.
-  wait: bool,
-}
-
-impl TryFrom<(Config, &Environment)> for Sandbox {
+impl<'a> TryFrom<(Config, &'a Environment)> for Sandbox<'a> {
   type Error = Error;
 
-  fn try_from(value: (Config, &Environment)) -> Result<Self> {
+  fn try_from(value: (Config, &'a Environment)) -> Result<Self> {
     let (config, environment) = value;
 
     Self::new(config, environment, &MaterialSystem)
   }
 }
 
-impl Sandbox {
-  fn new(config: Config, environment: &Environment, system: &impl System) -> Result<Self> {
+impl<'a> Sandbox<'a> {
+  fn new(config: Config, environment: &'a Environment, system: &impl System) -> Result<Self> {
     ensure!(system.geteuid().is_root(), Error::NotRoot);
 
     if system.getegid().as_raw() != 0 {
@@ -65,24 +37,15 @@ impl Sandbox {
         .map_err(|e| Error::Permission(format!("cannot switch to root group: {}", e)))?;
     }
 
-    let id = config.sandbox_id.unwrap_or(0);
+    let invoked_by_root = system.getuid().is_root();
 
     ensure!(
-      id < environment.num_sandboxes,
+      config.sandbox_id.unwrap_or(0) < environment.num_sandboxes,
       Error::Config(format!(
         "sandbox id out of range (allowed: 0-{})",
         environment.num_sandboxes - 1
       ))
     );
-
-    let original_uid = system.getuid();
-
-    if environment.restrict_initialization {
-      ensure!(
-        original_uid.is_root(),
-        Error::Permission("you must be root to initialize the sandbox".into())
-      );
-    }
 
     let (original_uid, original_gid) = config.credentials(system)?;
 
@@ -91,26 +54,34 @@ impl Sandbox {
     system.umask(Mode::from_bits_truncate(0o022));
 
     Ok(Self {
-      cgroup: config.cgroup,
-      credentials: Credentials {
-        gid: (environment.first_sandbox_gid + id).into(),
-        id,
-        original_gid,
-        original_uid,
-        uid: (environment.first_sandbox_uid + id).into(),
-      },
-      directory: environment.sandbox_root.join(id.to_string()),
-      initialized: true,
-      verbose: config.verbose,
-      wait: config.wait,
+      config,
+      environment,
+      initialized: false,
+      invoked_by_root,
+      original_gid,
+      original_uid,
     })
   }
 
-  /// Run a command in the sandbox.
+  /// Initialize the sandbox.
+  ///
+  /// This method should be called before executing any programs in the sandbox.
+  pub fn initialize(&self) -> Result {
+    if self.environment.restrict_initialization {
+      ensure!(
+        self.invoked_by_root,
+        Error::Permission("you must be root to initialize the sandbox".into())
+      );
+    }
+
+    Ok(())
+  }
+
+  /// Execute a program in the sandbox.
   pub fn execute(&self, _ctx: ExecutionContext) -> Result<ExecutionResult> {
     ensure!(self.initialized, Error::NotInitialized);
 
-    todo!("Run a specified command in the sandbox");
+    todo!("Execute a specified program in the sandbox");
   }
 
   /// Clean up the sandbox.
@@ -118,6 +89,26 @@ impl Sandbox {
     ensure!(self.initialized, Error::NotInitialized);
 
     todo!("Clean up the sandbox");
+  }
+
+  /// Get the id of the sandbox.
+  pub fn id(&self) -> u32 {
+    self.config.sandbox_id.unwrap_or(0)
+  }
+
+  /// Get the group id of the sandbox.
+  pub fn gid(&self) -> Gid {
+    Gid::from_raw(self.environment.first_sandbox_gid + self.id())
+  }
+
+  /// Get the user id of the sandbox.
+  pub fn uid(&self) -> Uid {
+    Uid::from_raw(self.environment.first_sandbox_uid + self.id())
+  }
+
+  /// Get the directory of the sandbox.
+  pub fn directory(&self) -> PathBuf {
+    self.environment.sandbox_root.join(self.id().to_string())
   }
 }
 
@@ -188,7 +179,9 @@ mod tests {
       umask: RefCell::new(None),
     };
 
-    let result = Sandbox::new(config, &Environment::default(), &mock);
+    let environment = Environment::default();
+
+    let result = Sandbox::new(config, &environment, &mock);
 
     assert!(matches!(result, Err(Error::NotRoot)));
   }
@@ -206,7 +199,9 @@ mod tests {
       umask: RefCell::new(None),
     };
 
-    let result = Sandbox::new(config, &Environment::default(), &mock);
+    let environment = Environment::default();
+
+    let result = Sandbox::new(config, &environment, &mock);
 
     assert_matches!(
       result,
@@ -227,7 +222,9 @@ mod tests {
       umask: RefCell::new(None),
     };
 
-    let result = Sandbox::new(config, &Environment::default(), &mock);
+    let environment = Environment::default();
+
+    let result = Sandbox::new(config, &environment, &mock);
 
     assert_matches!(
       result,
@@ -252,7 +249,9 @@ mod tests {
       umask: RefCell::new(None),
     };
 
-    let result = Sandbox::new(config, &Environment::default(), &mock);
+    let environment = Environment::default();
+
+    let result = Sandbox::new(config, &environment, &mock);
 
     assert_matches!(
       result,
@@ -276,7 +275,9 @@ mod tests {
       umask: RefCell::new(None),
     };
 
-    let result = Sandbox::new(config, &Environment::default(), &mock);
+    let environment = Environment::default();
+
+    let result = Sandbox::new(config, &environment, &mock);
 
     assert_matches!(
       result,
@@ -297,12 +298,14 @@ mod tests {
       umask: RefCell::new(None),
     };
 
-    let sandbox = Sandbox::new(config, &Environment::default(), &mock)
-      .expect("Sandbox creation should succeed");
+    let environment = Environment::default();
+
+    let sandbox =
+      Sandbox::new(config, &environment, &mock).expect("Sandbox creation should succeed");
 
     // With no as_uid/as_gid, the sandbox takes the original uid/gid from the system.
-    assert_eq!(sandbox.credentials.original_gid, 0.into());
-    assert_eq!(sandbox.credentials.original_uid, 0.into());
+    assert_eq!(sandbox.original_gid, 0.into());
+    assert_eq!(sandbox.original_uid, 0.into());
 
     assert_eq!(
       mock.umask.borrow().unwrap(),
@@ -328,12 +331,14 @@ mod tests {
       umask: RefCell::new(None),
     };
 
-    let sandbox = Sandbox::new(config, &Environment::default(), &mock)
-      .expect("Sandbox creation should succeed");
+    let environment = Environment::default();
+
+    let sandbox =
+      Sandbox::new(config, &environment, &mock).expect("Sandbox creation should succeed");
 
     // When as_uid/as_gid are provided and allowed, the sandbox's id are set to those values.
-    assert_eq!(sandbox.credentials.original_uid, 2000.into());
-    assert_eq!(sandbox.credentials.original_gid, 2000.into());
+    assert_eq!(sandbox.original_uid, 2000.into());
+    assert_eq!(sandbox.original_gid, 2000.into());
   }
 
   #[test]
@@ -364,13 +369,13 @@ mod tests {
       Sandbox::new(config, &environment, &mock).expect("Sandbox creation should succeed");
 
     assert_eq!(
-      sandbox.directory,
+      sandbox.directory(),
       PathBuf::from("/tmp/isolate_test").join("5")
     );
 
-    assert_eq!(sandbox.credentials.gid, (20000 + 5).into());
-    assert_eq!(sandbox.credentials.id, 5);
-    assert_eq!(sandbox.credentials.uid, (10000 + 5).into());
+    assert_eq!(sandbox.gid(), (20000 + 5).into());
+    assert_eq!(sandbox.id(), 5);
+    assert_eq!(sandbox.uid(), (10000 + 5).into());
   }
 
   #[test]
@@ -427,10 +432,10 @@ mod tests {
       umask: RefCell::new(None),
     };
 
-    let result = Sandbox::new(config, &environment, &mock);
+    let sandbox = Sandbox::new(config, &environment, &mock).unwrap();
 
     assert_matches!(
-      result,
+      sandbox.initialize(),
       Err(Error::Permission(message)) if message.contains("you must be root to initialize the sandbox")
     );
   }
