@@ -30,19 +30,6 @@ pub struct Sandbox {
   /// Whether the sandbox has been initialized.
   initialized: bool,
 
-  /// Directory where lock files are created.
-  ///
-  /// This directory is created and verified upon `Sandbox` initialization.
-  lock_root: PathBuf,
-
-  /// All sandboxes are created under this directory.
-  ///
-  /// To avoid symlink attacks, this directory and all its ancestors
-  /// must be writeable only to root.
-  ///
-  /// This directory is (optionally) created and verified upon `Sandbox` initialization.
-  sandbox_root: PathBuf,
-
   /// Tell the sandbox manager to be verbose and report on what is going on.
   ///
   /// This is useful for debugging purposes.
@@ -114,8 +101,6 @@ impl Sandbox {
       },
       directory: environment.sandbox_root.join(id.to_string()),
       initialized: true,
-      lock_root: environment.lock_root.clone(),
-      sandbox_root: environment.sandbox_root.clone(),
       verbose: config.verbose,
       wait: config.wait,
     })
