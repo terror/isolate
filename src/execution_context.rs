@@ -126,7 +126,7 @@ pub struct ExecutionContext<'a> {
   /// process.
   ///
   /// See also `stderr-to-stdout`.
-  pub stderr: Option<PathBuf>,
+  pub stderr: Option<Utf8PathBuf>,
 
   /// Limit process stack to 'size' kilobytes.
   ///
@@ -151,7 +151,7 @@ pub struct ExecutionContext<'a> {
   /// (which means that the sandboxed program can manipulate it arbitrarily).
   ///
   /// If not specified, standard input is inherited from the parent process.
-  pub stdin: Option<PathBuf>,
+  pub stdin: Option<Utf8PathBuf>,
 
   /// Redirect standard output to a file.
   ///
@@ -160,7 +160,7 @@ pub struct ExecutionContext<'a> {
   ///
   /// If not specified, standard output is inherited from the parent process
   /// and the sandbox manager does not write anything to it.
-  pub stdout: Option<PathBuf>,
+  pub stdout: Option<Utf8PathBuf>,
 
   /// Limit run time of the program to 'time' milliseconds.
   ///
@@ -216,7 +216,7 @@ pub struct ExecutionContext<'a> {
   /// Change directory to a specified path before executing the program.
   ///
   /// This path must be relative to the root of the sandbox.
-  pub working_directory: Option<PathBuf>,
+  pub working_directory: Option<Utf8PathBuf>,
 }
 
 impl Default for ExecutionContext<'_> {
@@ -302,13 +302,13 @@ impl<'a> ExecutionContext<'a> {
   fn default_mounts() -> Result<Vec<Mount>> {
     Ok(vec![
       Mount::read_write("box", Some("./box"))?,
-      Mount::read_only("bin", None::<&Path>)?,
-      Mount::device("dev", None::<&Path>)?,
-      Mount::read_only("lib", None::<&Path>)?,
-      Mount::optional("lib64", None::<&Path>)?,
+      Mount::read_only("bin", None::<&Utf8Path>)?,
+      Mount::device("dev", None::<&Utf8Path>)?,
+      Mount::read_only("lib", None::<&Utf8Path>)?,
+      Mount::optional("lib64", None::<&Utf8Path>)?,
       Mount::filesystem("proc", "proc")?,
       Mount::temporary("tmp")?,
-      Mount::read_only("usr", None::<&Path>)?,
+      Mount::read_only("usr", None::<&Utf8Path>)?,
     ])
   }
 
@@ -401,7 +401,7 @@ impl<'a> ExecutionContext<'a> {
     }
   }
 
-  pub fn stderr(self, stderr: Option<PathBuf>) -> Self {
+  pub fn stderr(self, stderr: Option<Utf8PathBuf>) -> Self {
     Self { stderr, ..self }
   }
 
@@ -412,11 +412,11 @@ impl<'a> ExecutionContext<'a> {
     }
   }
 
-  pub fn stdin(self, stdin: Option<PathBuf>) -> Self {
+  pub fn stdin(self, stdin: Option<Utf8PathBuf>) -> Self {
     Self { stdin, ..self }
   }
 
-  pub fn stdout(self, stdout: Option<PathBuf>) -> Self {
+  pub fn stdout(self, stdout: Option<Utf8PathBuf>) -> Self {
     Self { stdout, ..self }
   }
 
@@ -451,7 +451,7 @@ impl<'a> ExecutionContext<'a> {
     }
   }
 
-  pub fn working_directory(self, working_directory: Option<PathBuf>) -> Self {
+  pub fn working_directory(self, working_directory: Option<Utf8PathBuf>) -> Self {
     Self {
       working_directory,
       ..self

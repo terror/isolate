@@ -2,6 +2,7 @@
 
 use {
   assert_matches::assert_matches,
+  camino::Utf8PathBuf,
   isolate::{Config, Environment, Error, Sandbox},
   nix::unistd::{geteuid, seteuid, Uid},
   std::{fs, os::unix::fs::PermissionsExt, path::PathBuf},
@@ -73,7 +74,7 @@ fn sandbox_initialization_creates_sandbox_directories() {
     fs::set_permissions(ancestor, fs::Permissions::from_mode(0o700)).unwrap();
   }
 
-  let sandbox_root = temp_dir.path().join("sandbox_root");
+  let sandbox_root = Utf8PathBuf::from_path_buf(temp_dir.path().join("sandbox_root")).unwrap();
 
   let environment = Environment {
     sandbox_root: sandbox_root.clone(),
@@ -118,7 +119,7 @@ fn sandbox_initialization_creates_sandbox_directories() {
 fn sandbox_initialization_fails_on_bad_ancestor_permissions() {
   let temp_dir = TempDir::new().unwrap();
 
-  let sandbox_root = temp_dir.path().join("sandbox_root");
+  let sandbox_root = Utf8PathBuf::from_path_buf(temp_dir.path().join("sandbox_root")).unwrap();
 
   let environment = Environment {
     sandbox_root: sandbox_root.clone(),

@@ -17,7 +17,7 @@ pub struct Environment {
   /// Directory where lock files are created.
   ///
   /// This directory is created and verified upon `Sandbox` initialization.
-  pub lock_root: PathBuf,
+  pub lock_root: Utf8PathBuf,
 
   /// Number of sandbox instances supported.
   pub num_sandboxes: u32,
@@ -31,7 +31,7 @@ pub struct Environment {
   /// must be writeable only to root.
   ///
   /// This directory is created and verified upon `Sandbox` initialization.
-  pub sandbox_root: PathBuf,
+  pub sandbox_root: Utf8PathBuf,
 }
 
 impl Default for Environment {
@@ -39,10 +39,10 @@ impl Default for Environment {
     Self {
       first_sandbox_gid: 60000,
       first_sandbox_uid: 60000,
-      lock_root: PathBuf::from("/run/isolate/locks"),
+      lock_root: Utf8PathBuf::from("/run/isolate/locks"),
       num_sandboxes: 1000,
       restrict_initialization: false,
-      sandbox_root: PathBuf::from("/var/local/lib/isolate"),
+      sandbox_root: Utf8PathBuf::from("/var/local/lib/isolate"),
     }
   }
 }

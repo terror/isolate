@@ -36,17 +36,17 @@ pub struct MountOptions {
 #[derive(Debug, Default, PartialEq)]
 pub struct Mount {
   /// Path inside the sandbox where the directory will be mounted.
-  inside_path: PathBuf,
+  inside_path: Utf8PathBuf,
   /// Path outside the sandbox to be mounted.
-  outside_path: Option<PathBuf>,
+  outside_path: Option<Utf8PathBuf>,
   /// Mount options for this directory.
   options: MountOptions,
 }
 
 impl Mount {
   pub fn new(
-    inside_path: impl AsRef<Path>,
-    outside_path: Option<impl AsRef<Path>>,
+    inside_path: impl AsRef<Utf8Path>,
+    outside_path: Option<impl AsRef<Utf8Path>>,
     options: MountOptions,
   ) -> Result<Self> {
     let inside_path = inside_path.as_ref();
@@ -74,8 +74,8 @@ impl Mount {
   }
 
   pub fn device(
-    inside_path: impl AsRef<Path>,
-    outside_path: Option<impl AsRef<Path>>,
+    inside_path: impl AsRef<Utf8Path>,
+    outside_path: Option<impl AsRef<Utf8Path>>,
   ) -> Result<Self> {
     Self::new(
       inside_path,
@@ -87,10 +87,10 @@ impl Mount {
     )
   }
 
-  pub fn filesystem(inside_path: impl AsRef<Path>, fs_type: impl Into<String>) -> Result<Self> {
+  pub fn filesystem(inside_path: impl AsRef<Utf8Path>, fs_type: impl Into<String>) -> Result<Self> {
     Self::new(
       inside_path,
-      None::<&Path>,
+      None::<&Utf8Path>,
       MountOptions {
         filesystem: Some(fs_type.into()),
         ..Default::default()
@@ -99,8 +99,8 @@ impl Mount {
   }
 
   pub fn optional(
-    inside_path: impl AsRef<Path>,
-    outside_path: Option<impl AsRef<Path>>,
+    inside_path: impl AsRef<Utf8Path>,
+    outside_path: Option<impl AsRef<Utf8Path>>,
   ) -> Result<Self> {
     Self::new(
       inside_path,
@@ -113,15 +113,15 @@ impl Mount {
   }
 
   pub fn read_only(
-    inside_path: impl AsRef<Path>,
-    outside_path: Option<impl AsRef<Path>>,
+    inside_path: impl AsRef<Utf8Path>,
+    outside_path: Option<impl AsRef<Utf8Path>>,
   ) -> Result<Self> {
     Self::new(inside_path, outside_path, MountOptions::default())
   }
 
   pub fn read_write(
-    inside_path: impl AsRef<Path>,
-    outside_path: Option<impl AsRef<Path>>,
+    inside_path: impl AsRef<Utf8Path>,
+    outside_path: Option<impl AsRef<Utf8Path>>,
   ) -> Result<Self> {
     Self::new(
       inside_path,
@@ -133,10 +133,10 @@ impl Mount {
     )
   }
 
-  pub fn temporary(inside_path: impl AsRef<Path>) -> Result<Self> {
+  pub fn temporary(inside_path: impl AsRef<Utf8Path>) -> Result<Self> {
     Self::new(
       inside_path,
-      None::<&Path>,
+      None::<&Utf8Path>,
       MountOptions {
         temporary: true,
         read_write: true,
@@ -153,8 +153,8 @@ mod tests {
   #[test]
   fn valid_mount() {
     let mount = Mount::new(
-      Path::new("/sandbox/path"),
-      Some(Path::new("/host/path")),
+      Utf8Path::new("/sandbox/path"),
+      Some(Utf8Path::new("/host/path")),
       MountOptions::default(),
     );
 
@@ -169,8 +169,8 @@ mod tests {
     };
 
     let mount = Mount::new(
-      Path::new("/sandbox/path"),
-      Some(Path::new("/host/path")),
+      Utf8Path::new("/sandbox/path"),
+      Some(Utf8Path::new("/host/path")),
       options,
     );
 
@@ -188,7 +188,7 @@ mod tests {
       ..Default::default()
     };
 
-    let mount = Mount::new(Path::new("/sandbox/path"), None::<&Path>, options);
+    let mount = Mount::new(Utf8Path::new("/sandbox/path"), None::<&Utf8Path>, options);
 
     assert!(mount.is_ok());
     assert!(mount.unwrap().options.read_write);
@@ -206,7 +206,7 @@ mod tests {
       }
     );
 
-    let dev = Mount::device("dev", None::<&Path>).unwrap();
+    let dev = Mount::device("dev", None::<&Utf8Path>).unwrap();
 
     assert_eq!(
       dev.options,
@@ -221,7 +221,7 @@ mod tests {
     assert_eq!(
       tmp,
       Mount {
-        inside_path: PathBuf::from("tmp"),
+        inside_path: Utf8PathBuf::from("tmp"),
         outside_path: None,
         options: MountOptions {
           temporary: true,

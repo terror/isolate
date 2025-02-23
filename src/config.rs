@@ -2,32 +2,30 @@ use super::*;
 
 #[derive(Debug, PartialEq)]
 pub enum CgroupRoot {
-  Automatic(PathBuf),
-  Manual(PathBuf),
+  Automatic(Utf8PathBuf),
+  Manual(Utf8PathBuf),
 }
 
 impl Default for CgroupRoot {
   fn default() -> Self {
-    Self::Automatic(PathBuf::from("/run/isolate/cgroup"))
+    Self::Automatic(Utf8PathBuf::from("/run/isolate/cgroup"))
   }
 }
 
-impl From<PathBuf> for CgroupRoot {
-  fn from(path: PathBuf) -> Self {
-    if let Some(file_name) = path.to_str() {
-      if let Some(stripped) = file_name.strip_prefix("auto:") {
-        return Self::Automatic(PathBuf::from(stripped));
-      }
+impl From<Utf8PathBuf> for CgroupRoot {
+  fn from(path: Utf8PathBuf) -> Self {
+    if let Some(stripped) = path.as_str().strip_prefix("auto:") {
+      return Self::Automatic(Utf8PathBuf::from(stripped));
     }
 
     Self::Manual(path)
   }
 }
 
-impl From<CgroupRoot> for PathBuf {
+impl From<CgroupRoot> for Utf8PathBuf {
   fn from(root: CgroupRoot) -> Self {
     match root {
-      CgroupRoot::Automatic(path) => PathBuf::from(format!("auto:{}", path.display())),
+      CgroupRoot::Automatic(path) => Utf8PathBuf::from(format!("auto:{}", path)),
       CgroupRoot::Manual(path) => path,
     }
   }
@@ -162,31 +160,31 @@ mod tests {
   #[test]
   fn cgroup_root_from_pathbuf() {
     let (auto_path, fixed_path) = (
-      PathBuf::from("auto:/some/path"),
-      PathBuf::from("/some/fixed/path"),
+      Utf8PathBuf::from("auto:/some/path"),
+      Utf8PathBuf::from("/some/fixed/path"),
     );
 
     assert_matches!(CgroupRoot::from(auto_path),
-      CgroupRoot::Automatic(path) if path == PathBuf::from("/some/path")
+      CgroupRoot::Automatic(path) if path == "/some/path"
     );
 
     assert_matches!(CgroupRoot::from(fixed_path),
-      CgroupRoot::Manual(path) if path == PathBuf::from("/some/fixed/path")
+      CgroupRoot::Manual(path) if path == "/some/fixed/path"
     );
   }
 
   #[test]
   fn pathbuf_from_cgroup_root() {
     let (auto_root, fixed_root) = (
-      CgroupRoot::Automatic(PathBuf::from("/some/path")),
-      CgroupRoot::Manual(PathBuf::from("/some/fixed/path")),
+      CgroupRoot::Automatic(Utf8PathBuf::from("/some/path")),
+      CgroupRoot::Manual(Utf8PathBuf::from("/some/fixed/path")),
     );
 
-    let auto_path: PathBuf = auto_root.into();
-    let fixed_path: PathBuf = fixed_root.into();
+    let auto_path: Utf8PathBuf = auto_root.into();
+    let fixed_path: Utf8PathBuf = fixed_root.into();
 
-    assert_eq!(auto_path, PathBuf::from("auto:/some/path"));
-    assert_eq!(fixed_path, PathBuf::from("/some/fixed/path"));
+    assert_eq!(auto_path, Utf8PathBuf::from("auto:/some/path"));
+    assert_eq!(fixed_path, Utf8PathBuf::from("/some/fixed/path"));
   }
 
   #[test]
@@ -194,7 +192,7 @@ mod tests {
     let config = CgroupConfig::default();
 
     assert_matches!(config.root,
-      CgroupRoot::Automatic(path) if path == PathBuf::from("/run/isolate/cgroup")
+      CgroupRoot::Automatic(path) if path == "/run/isolate/cgroup"
     );
   }
 }

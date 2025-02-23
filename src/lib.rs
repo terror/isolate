@@ -1,4 +1,5 @@
 use {
+  camino::{Utf8Path, Utf8PathBuf},
   execution_context::ExecutionContext,
   execution_result::ExecutionResult,
   mount::Mount,
@@ -10,7 +11,7 @@ use {
     fmt::{self, Display, Formatter},
     fs,
     os::unix::fs::PermissionsExt,
-    path::{Path, PathBuf},
+    path::PathBuf,
   },
   system::{MaterialSystem, System},
   variable::Variable,

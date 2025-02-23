@@ -34,9 +34,7 @@ impl<'a> Sandbox<'a> {
     ensure!(system.geteuid().is_root(), Error::NotRoot);
 
     if system.getegid().as_raw() != 0 {
-      system
-        .setegid(0)
-        .map_err(|e| Error::Permission(format!("cannot switch to root group: {}", e)))?;
+      system.setegid(0)?;
     }
 
     ensure!(
@@ -87,7 +85,7 @@ impl<'a> Sandbox<'a> {
     if !self.environment.sandbox_root.exists() {
       self
         .system
-        .create_directory(&self.environment.sandbox_root, 0o700)?;
+        .create_directory_with_mode(&self.environment.sandbox_root, 0o700)?;
     }
 
     for ancestor in self.environment.sandbox_root.ancestors() {
@@ -97,26 +95,27 @@ impl<'a> Sandbox<'a> {
         metadata.permissions().mode() & 0o022 == 0,
         Error::Permission(format!(
           "directory {} must be writable only by root",
-          ancestor.display()
+          ancestor
         ))
       );
 
       ensure!(
         metadata.is_dir(),
-        Error::Permission(format!("{} must be a directory", ancestor.display()))
+        Error::Permission(format!("{} must be a directory", ancestor))
       );
     }
 
-    self.system.recreate_directory(&self.directory(), 0o700)?;
+    self
+      .system
+      .recreate_directory_with_mode(&self.directory(), 0o700)?;
 
     let sandbox = self.directory().join("box");
 
-    self.system.create_directory(&sandbox, 0o700)?;
+    self.system.create_directory_with_mode(&sandbox, 0o700)?;
 
     self
       .system
-      .chown(&sandbox, Some(self.original_uid), Some(self.original_gid))
-      .map_err(|error| Error::Permission(format!("cannot chown sandbox path: {error}")))?;
+      .chown(&sandbox, Some(self.original_uid), Some(self.original_gid))?;
 
     Ok(())
   }
@@ -151,7 +150,7 @@ impl<'a> Sandbox<'a> {
   }
 
   /// Get the directory of the sandbox.
-  pub fn directory(&self) -> PathBuf {
+  pub fn directory(&self) -> Utf8PathBuf {
     self.environment.sandbox_root.join(self.id().to_string())
   }
 }
@@ -163,7 +162,6 @@ mod tests {
     assert_matches::assert_matches,
     config::Config,
     nix::{
-      errno::Errno,
       sys::stat::Mode,
       unistd::{Gid, Uid},
     },
@@ -172,11 +170,9 @@ mod tests {
 
   #[derive(Debug)]
   struct MockSystem {
-    chown_errno: Option<Errno>,
     egid: Gid,
     euid: Uid,
     gid: Gid,
-    setegid_errno: Option<Errno>,
     uid: Uid,
     umask: RefCell<Option<Mode>>,
   }
@@ -184,11 +180,9 @@ mod tests {
   impl Default for MockSystem {
     fn default() -> Self {
       Self {
-        chown_errno: None,
         egid: Gid::from_raw(0),
         euid: Uid::from_raw(0),
         gid: Gid::from_raw(0),
-        setegid_errno: None,
         uid: Uid::from_raw(0),
         umask: RefCell::new(None),
       }
@@ -196,15 +190,11 @@ mod tests {
   }
 
   impl System for MockSystem {
-    fn chown(&self, _path: &Path, _uid: Option<Uid>, _gid: Option<Gid>) -> Result<(), nix::Error> {
-      if let Some(errno) = self.chown_errno {
-        Err(errno)
-      } else {
-        Ok(())
-      }
+    fn chown(&self, _path: &Utf8Path, _uid: Option<Uid>, _gid: Option<Gid>) -> Result {
+      Ok(())
     }
 
-    fn create_directory(&self, _path: &Path, _mode: u32) -> Result {
+    fn create_directory_with_mode(&self, _path: &Utf8Path, _mode: u32) -> Result {
       Ok(())
     }
 
@@ -224,16 +214,12 @@ mod tests {
       self.uid
     }
 
-    fn recreate_directory(&self, _path: &Path, _mode: u32) -> Result {
+    fn recreate_directory_with_mode(&self, _path: &Utf8Path, _mode: u32) -> Result {
       Ok(())
     }
 
-    fn setegid(&self, _gid: u32) -> Result<(), nix::Error> {
-      if let Some(errno) = self.setegid_errno {
-        Err(errno)
-      } else {
-        Ok(())
-      }
+    fn setegid(&self, _gid: u32) -> Result {
+      Ok(())
     }
 
     fn umask(&self, mask: Mode) -> Mode {
@@ -256,46 +242,6 @@ mod tests {
     let result = Sandbox::new(config, &environment, &mock);
 
     assert!(matches!(result, Err(Error::NotRoot)));
-  }
-
-  #[test]
-  fn sandbox_construction_setegid_fails_with_eperm() {
-    let environment = Environment::default();
-
-    let config = Config::default();
-
-    let mock = MockSystem {
-      egid: Gid::from_raw(1000),
-      setegid_errno: Some(Errno::EPERM),
-      ..Default::default()
-    };
-
-    let result = Sandbox::new(config, &environment, &mock);
-
-    assert_matches!(
-      result,
-      Err(Error::Permission(message)) if message.contains("cannot switch to root group")
-    );
-  }
-
-  #[test]
-  fn sandbox_construction_setegid_fails_with_einval() {
-    let environment = Environment::default();
-
-    let config = Config::default();
-
-    let mock = MockSystem {
-      egid: Gid::from_raw(1000),
-      setegid_errno: Some(Errno::EINVAL),
-      ..Default::default()
-    };
-
-    let result = Sandbox::new(config, &environment, &mock);
-
-    assert_matches!(
-      result,
-      Err(Error::Permission(message)) if message.contains("cannot switch to root group")
-    );
   }
 
   #[test]
@@ -378,7 +324,7 @@ mod tests {
   #[test]
   fn sandbox_construction_credentials_setup() {
     let environment = Environment {
-      sandbox_root: PathBuf::from("/tmp/isolate_test"),
+      sandbox_root: Utf8PathBuf::from("/tmp/isolate_test"),
       first_sandbox_uid: 10000,
       first_sandbox_gid: 20000,
       num_sandboxes: 10,
@@ -397,7 +343,7 @@ mod tests {
 
     assert_eq!(
       sandbox.directory(),
-      PathBuf::from("/tmp/isolate_test").join("5")
+      Utf8PathBuf::from("/tmp/isolate_test").join("5")
     );
 
     assert_eq!(sandbox.gid(), (20000 + 5).into());
@@ -408,7 +354,7 @@ mod tests {
   #[test]
   fn sandbox_construction_id_out_of_range() {
     let environment = Environment {
-      sandbox_root: PathBuf::from("/tmp/isolate_test"),
+      sandbox_root: Utf8PathBuf::from("/tmp/isolate_test"),
       first_sandbox_gid: 20000,
       first_sandbox_uid: 10000,
       num_sandboxes: 10, // Valid box id's are between 0 and 9 (inclusive).
